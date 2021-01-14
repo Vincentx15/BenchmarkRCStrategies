@@ -1,20 +1,21 @@
 import keras_genomics
 import tensorflow as tf
-import keras 
+import keras
 import numpy as np
 import os
 import functools
 
-from keras import backend as K 
-from keras.layers.core import Dropout 
+from keras import backend as K
+from keras.layers.core import Dropout
 from keras.layers.core import Flatten
 from keras.engine import Layer
-from keras.models import Sequential 
+from keras.models import Sequential
 import keras.layers as kl
 from keras.engine.base_layer import InputSpec
+from keras.utils import conv_utils
 from keras_genomics.layers import RevCompConv1D
 from keras import initializers
- 
+from keras.layers.convolutional import Conv1D
 
 from keras.layers import Input
 from keras.models import Model
@@ -23,23 +24,97 @@ from numpy.random import seed
 from tensorflow import set_random_seed
 from keras.callbacks import EarlyStopping, History, ModelCheckpoint
 
-#Used to preserve RC symmetry
-class RevCompSumPool(Layer): 
-    def __init__(self, **kwargs): 
+
+# Used to preserve RC symmetry
+class RevCompSumPool(Layer):
+    def __init__(self, **kwargs):
         super(RevCompSumPool, self).__init__(**kwargs)
 
     def build(self, input_shape):
         self.num_input_chan = input_shape[2]
         super(RevCompSumPool, self).build(input_shape)
 
-    def call(self, inputs): 
-        inputs = (inputs[:,:,:int(self.num_input_chan/2)] + inputs[:,:,int(self.num_input_chan/2):][:,::-1,::-1])
+    def call(self, inputs):
+        inputs = (inputs[:, :, :int(self.num_input_chan / 2)] + inputs[:, :, int(self.num_input_chan / 2):][:, ::-1,
+                                                                ::-1])
         return inputs
-      
+
     def compute_output_shape(self, input_shape):
-        return (input_shape[0], input_shape[1], int(input_shape[2]/2))
-    
-    
+        return (input_shape[0], input_shape[1], int(input_shape[2] / 2))
+
+
+class IrrepToIrrepConv(Conv1D):
+    """
+    Mapping from one irrep layer to another
+    """
+
+    def __init__(self, a_in, a_out, b_in, b_out, **kwargs):
+        super(IrrepToIrrepConv, self).__init__(**kwargs)
+        self.a_in = a_in
+        self.a_out = a_out
+        self.b_in = b_in
+        self.b_out = b_out
+
+    def build(self, input_shape):
+        """
+        Overrides the kernel construction to build a constrained one
+        """
+
+        if self.data_format == 'channels_first':
+            channel_axis = 1
+        else:
+            channel_axis = -1
+        if input_shape[channel_axis] is None:
+            raise ValueError('The channel dimension of the inputs '
+                             'should be defined. Found `None`.')
+        input_dim = input_shape[channel_axis]
+        # kernel_shape = self.kernel_size + (input_dim, self.filters)
+        assert self.a_in + self.b_in == input_dim
+
+        left_kernel = self.add_weight(shape=(self.kernel_size % 2, input_dim, self.filters),
+                                      initializer=self.kernel_initializer,
+                                      name='center_kernel')
+        right_kernel = left_kernel[::-1, :, :]
+        right_kernel[:, -self.b_in:, :] = -right_kernel[:, -self.b_in:, :]
+        right_kernel[:, :, -self.b_out:] = -right_kernel[:, :, -self.b_out:]
+
+        # odd size
+        if self.kernel_size % 2 == 1:
+            center_kernel = self.add_weight(shape=(1, input_dim, self.filters),
+                                            initializer=self.kernel_initializer,
+                                            name='center_kernel')
+            self.kernel = K.concatenate((left_kernel, center_kernel, right_kernel), axis=0)
+
+        else:
+            self.kernel = K.concatenate((left_kernel, right_kernel), axis=0)
+
+        # For now, let's not use bias. It can be added on the a_n invariant dimensions, but not so easy to implement
+        # in Keras
+        if self.use_bias:
+            raise NotImplementedError
+            # self.bias = self.add_weight(shape=(self.filters,),
+            #                             initializer=self.bias_initializer,
+            #                             name='bias',
+            #                             regularizer=self.bias_regularizer,
+            #                             constraint=self.bias_constraint)
+        else:
+            self.bias = None
+        # Set input spec.
+        self.input_spec = InputSpec(ndim=self.rank + 2,
+                                    axes={channel_axis: input_dim})
+        self.built = True
+
+    def get_config(self):
+        config = {'a_in': self.a_in,
+                  'a_out': self.a_out,
+                  'b_in': self.b_in,
+                  'b_out': self.b_out}
+        base_config = super(IrrepToIrrepConv, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
+
+
 class WeightedSum1D(Layer):
     '''Learns a weight for each position, for each channel, and sums
     lengthwise.
@@ -55,9 +130,10 @@ class WeightedSum1D(Layer):
     # Output shape
         2D tensor with shape: `(samples, features)`.
     '''
+
     def __init__(self, symmetric, input_is_revcomp_conv,
-                       smoothness_penalty=None, bias=False,
-                       **kwargs):
+                 smoothness_penalty=None, bias=False,
+                 **kwargs):
         super(WeightedSum1D, self).__init__(**kwargs)
         self.symmetric = symmetric
         self.input_is_revcomp_conv = input_is_revcomp_conv
@@ -65,43 +141,43 @@ class WeightedSum1D(Layer):
         self.bias = bias
         self.input_spec = [InputSpec(ndim=3)]
 
-    def build(self, input_shape): 
-        #input_shape[0] is the batch index
-        #input_shape[1] is length of input
-        #input_shape[2] is number of filters
+    def build(self, input_shape):
+        # input_shape[0] is the batch index
+        # input_shape[1] is length of input
+        # input_shape[2] is number of filters
 
-        #Equivalent to 'fanintimesfanouttimestwo' from the paper
-        limit = np.sqrt(6.0/(input_shape[1]*input_shape[2]*2))  
-        self.init = initializers.uniform(-1*limit, limit)
+        # Equivalent to 'fanintimesfanouttimestwo' from the paper
+        limit = np.sqrt(6.0 / (input_shape[1] * input_shape[2] * 2))
+        self.init = initializers.uniform(-1 * limit, limit)
 
         if (self.symmetric == False):
             W_length = input_shape[1]
         else:
-            self.odd_input_length = input_shape[1]%2.0 == 1
-            #+0.5 below turns floor into ceil
-            W_length = int(input_shape[1]/2.0 + 0.5)
+            self.odd_input_length = input_shape[1] % 2.0 == 1
+            # +0.5 below turns floor into ceil
+            W_length = int(input_shape[1] / 2.0 + 0.5)
 
         if (self.input_is_revcomp_conv == False):
             W_chan = input_shape[2]
         else:
-            assert input_shape[2]%2==0,\
-             "if input is revcomp conv, # incoming channels would be even"
-            W_chan = int(input_shape[2]/2)
+            assert input_shape[2] % 2 == 0, \
+                "if input is revcomp conv, # incoming channels would be even"
+            W_chan = int(input_shape[2] / 2)
 
         self.W_shape = (W_length, W_chan)
         self.b_shape = (W_chan,)
         self.W = self.add_weight(self.W_shape,
-             initializer=self.init,
-             name='{}_W'.format(self.name),
-             regularizer=(None if self.smoothness_penalty is None else
-                         regularizers.SmoothnessRegularizer(
-                          self.smoothness_penalty)))
+                                 initializer=self.init,
+                                 name='{}_W'.format(self.name),
+                                 regularizer=(None if self.smoothness_penalty is None else
+                                              regularizers.SmoothnessRegularizer(
+                                                  self.smoothness_penalty)))
         if (self.bias):
             assert False, "No bias was specified in original experiments"
 
         self.built = True
 
-    #3D input -> 2D output (loses length dimension)
+    # 3D input -> 2D output (loses length dimension)
     def compute_output_shape(self, input_shape):
         return (input_shape[0], input_shape[2])
 
@@ -110,22 +186,22 @@ class WeightedSum1D(Layer):
             W = self.W
         else:
             W = K.concatenate(
-                 tensors=[self.W,
-                          #reverse along length, concat along length
-                          self.W[::-1][(1 if self.odd_input_length else 0):]],
-                 axis=0)
+                tensors=[self.W,
+                         # reverse along length, concat along length
+                         self.W[::-1][(1 if self.odd_input_length else 0):]],
+                axis=0)
         if (self.bias):
             b = self.b
         if (self.input_is_revcomp_conv):
-            #reverse along both length and channel dims, concat along chan
-            #if symmetric=True, reversal along length here makes no diff
-            W = K.concatenate(tensors=[W, W[::-1,::-1]], axis=1)
+            # reverse along both length and channel dims, concat along chan
+            # if symmetric=True, reversal along length here makes no diff
+            W = K.concatenate(tensors=[W, W[::-1, ::-1]], axis=1)
             if (self.bias):
                 b = K.concatenate(tensors=[b, b[::-1]], axis=0)
-        output = K.sum(x*K.expand_dims(W,0), axis=1)
+        output = K.sum(x * K.expand_dims(W, 0), axis=1)
         if (self.bias):
-            output = output + K.expand_dims(b,0)
-        return output 
+            output = output + K.expand_dims(b, 0)
+        return output
 
     def get_config(self):
         config = {'symmetric': self.symmetric,
@@ -135,11 +211,11 @@ class WeightedSum1D(Layer):
         base_config = super(WeightedSum1D, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
-    
-def get_rc_model(parameters, is_weighted_sum, use_bias = False):
+
+def get_rc_model(parameters, is_weighted_sum, use_bias=False):
     rc_model = keras.models.Sequential()
     rc_model.add(keras_genomics.layers.convolutional.RevCompConv1D(
-        input_shape=(1000,4), nb_filter=16, filter_length=15))    
+        input_shape=(1000, 4), nb_filter=16, filter_length=15))
     rc_model.add(keras_genomics.layers.normalization.RevCompConv1DBatchNorm())
     rc_model.add(kl.core.Activation("relu"))
     rc_model.add(keras_genomics.layers.convolutional.RevCompConv1D(
@@ -151,119 +227,118 @@ def get_rc_model(parameters, is_weighted_sum, use_bias = False):
     rc_model.add(keras_genomics.layers.normalization.RevCompConv1DBatchNorm())
     rc_model.add(kl.core.Activation("relu"))
     rc_model.add(keras.layers.convolutional.MaxPooling1D(
-        pool_length = parameters['pool_size'], strides = parameters['strides']))
+        pool_length=parameters['pool_size'], strides=parameters['strides']))
     if is_weighted_sum:
         rc_model.add(WeightedSum1D(
             symmetric=False, input_is_revcomp_conv=True))
         rc_model.add(kl.Dense(output_dim=1, trainable=False,
                               init="ones"))
-    else:                 
+    else:
         rc_model.add(RevCompSumPool())
         rc_model.add(Flatten())
         rc_model.add(keras.layers.core.Dense(output_dim=1, trainable=True,
-                                             init="glorot_uniform", use_bias = use_bias))
+                                             init="glorot_uniform", use_bias=use_bias))
     rc_model.add(kl.core.Activation("sigmoid"))
-    rc_model.compile(optimizer = keras.optimizers.Adam(lr=0.001), 
+    rc_model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
                      loss="binary_crossentropy", metrics=["accuracy"])
-    return rc_model     
+    return rc_model
 
 
 def get_reg_model(parameters):
     model = keras.models.Sequential()
     model.add(keras.layers.Convolution1D(
-              input_shape=(1000,4), nb_filter=16, filter_length=15))
+        input_shape=(1000, 4), nb_filter=16, filter_length=15))
     model.add(keras.layers.normalization.BatchNormalization())
     model.add(keras.layers.core.Activation("relu"))
     model.add(keras.layers.convolutional.Convolution1D(
-            nb_filter=16, filter_length=14))
+        nb_filter=16, filter_length=14))
     model.add(keras.layers.normalization.BatchNormalization())
     model.add(keras.layers.Activation("relu"))
     model.add(keras.layers.convolutional.Convolution1D(
-            nb_filter=16, filter_length=14))
+        nb_filter=16, filter_length=14))
     model.add(keras.layers.normalization.BatchNormalization())
     model.add(keras.layers.Activation("relu"))
     model.add(keras.layers.convolutional.MaxPooling1D(pool_length=parameters['pool_size'],
-                                                      strides= parameters['strides']))         
+                                                      strides=parameters['strides']))
     model.add(Flatten())
     model.add(keras.layers.core.Dense(output_dim=1, trainable=True,
-                                    init="glorot_uniform"))
+                                      init="glorot_uniform"))
     model.add(keras.layers.core.Activation("sigmoid"))
-    model.compile(optimizer = keras.optimizers.Adam(lr=0.001), 
+    model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
                   loss="binary_crossentropy", metrics=["accuracy"])
     return model
 
 
 def get_siamese_model(parameters):
     main_input = Input(shape=(1000, 4))
-    rev_input = kl.Lambda(lambda x: x[:,::-1, ::-1])(main_input)
-    
+    rev_input = kl.Lambda(lambda x: x[:, ::-1, ::-1])(main_input)
+
     s_model = Sequential([
         keras.layers.Convolution1D(
-              input_shape=(1000,4), nb_filter=16, filter_length=15),
-        keras.layers.normalization.BatchNormalization(), 
+            input_shape=(1000, 4), nb_filter=16, filter_length=15),
+        keras.layers.normalization.BatchNormalization(),
         keras.layers.core.Activation("relu"),
         keras.layers.convolutional.Convolution1D(
             nb_filter=16, filter_length=14),
-        keras.layers.normalization.BatchNormalization(), 
+        keras.layers.normalization.BatchNormalization(),
         keras.layers.core.Activation("relu"),
         keras.layers.convolutional.Convolution1D(
             nb_filter=16, filter_length=14),
         keras.layers.normalization.BatchNormalization(),
         keras.layers.Activation("relu"),
         keras.layers.convolutional.MaxPooling1D(pool_length=parameters['pool_size'],
-                                                      strides= parameters['strides']),
-        Flatten(), 
+                                                strides=parameters['strides']),
+        Flatten(),
         keras.layers.core.Dense(output_dim=1, trainable=True,
-                                    init="glorot_uniform"),     
-    ],  name = "shared_layers")
+                                init="glorot_uniform"),
+    ], name="shared_layers")
 
     main_output = s_model(main_input)
     rev_output = s_model(rev_input)
-    
+
     avg = kl.average([main_output, rev_output])
-    
+
     final_out = kl.core.Activation("sigmoid")(avg)
-    siamese_model = Model(inputs = main_input, outputs = final_out)
-    siamese_model.compile(optimizer = keras.optimizers.Adam(lr=0.001), 
-                  loss="binary_crossentropy", metrics=["accuracy"])
+    siamese_model = Model(inputs=main_input, outputs=final_out)
+    siamese_model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                          loss="binary_crossentropy", metrics=["accuracy"])
     return siamese_model
 
 
-#The difference between this siamese model and the one above is when the averaging takes place
+# The difference between this siamese model and the one above is when the averaging takes place
 def get_new_siamese_model(parameters):
     main_input = Input(shape=(1000, 4))
-    rev_input = kl.Lambda(lambda x: x[:,::-1, ::-1])(main_input)
-    
+    rev_input = kl.Lambda(lambda x: x[:, ::-1, ::-1])(main_input)
+
     s_model = Sequential([
         keras.layers.Convolution1D(
-              input_shape=(1000,4), nb_filter=16, filter_length=15),
-        keras.layers.normalization.BatchNormalization(), 
+            input_shape=(1000, 4), nb_filter=16, filter_length=15),
+        keras.layers.normalization.BatchNormalization(),
         keras.layers.core.Activation("relu"),
         keras.layers.convolutional.Convolution1D(
             nb_filter=16, filter_length=14),
-        keras.layers.normalization.BatchNormalization(), 
+        keras.layers.normalization.BatchNormalization(),
         keras.layers.core.Activation("relu"),
         keras.layers.convolutional.Convolution1D(
             nb_filter=16, filter_length=14),
         keras.layers.normalization.BatchNormalization(),
         keras.layers.Activation("relu"),
         keras.layers.convolutional.MaxPooling1D(pool_length=parameters['pool_size'],
-                                                      strides= parameters['strides']),
-        Flatten(), 
+                                                strides=parameters['strides']),
+        Flatten(),
         keras.layers.core.Dense(output_dim=1, trainable=True,
-                                    init="glorot_uniform"),     
-    ],  name = "shared_layers")
+                                init="glorot_uniform"),
+    ], name="shared_layers")
 
     main_output = s_model(main_input)
     rev_output = s_model(rev_input)
-    
+
     final_out_main = kl.core.Activation("sigmoid")(main_output)
     final_out_rev = kl.core.Activation("sigmoid")(rev_output)
-    
+
     avg = kl.average([final_out_main, final_out_rev])
-    
-    siamese_model = Model(inputs = main_input, outputs = avg)
-    siamese_model.compile(optimizer = keras.optimizers.Adam(lr=0.001), 
-                  loss="binary_crossentropy", metrics=["accuracy"])
+
+    siamese_model = Model(inputs=main_input, outputs=avg)
+    siamese_model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                          loss="binary_crossentropy", metrics=["accuracy"])
     return siamese_model
-                     
