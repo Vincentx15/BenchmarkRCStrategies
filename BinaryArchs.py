@@ -15,7 +15,6 @@ from keras.engine.base_layer import InputSpec
 from keras.utils import conv_utils
 from keras_genomics.layers import RevCompConv1D
 from keras import initializers
-from keras.layers.convolutional import Conv1D
 
 from keras.layers import Input
 from keras.models import Model
@@ -41,77 +40,6 @@ class RevCompSumPool(Layer):
 
     def compute_output_shape(self, input_shape):
         return (input_shape[0], input_shape[1], int(input_shape[2] / 2))
-
-
-class IrrepToIrrepConv(Conv1D):
-    """
-    Mapping from one irrep layer to another
-    """
-
-    def __init__(self, a_in, a_out, b_in, b_out, **kwargs):
-        super(IrrepToIrrepConv, self).__init__(**kwargs)
-        self.a_in = a_in
-        self.a_out = a_out
-        self.b_in = b_in
-        self.b_out = b_out
-
-    def build(self, input_shape):
-        """
-        Overrides the kernel construction to build a constrained one
-        """
-
-        if self.data_format == 'channels_first':
-            channel_axis = 1
-        else:
-            channel_axis = -1
-        if input_shape[channel_axis] is None:
-            raise ValueError('The channel dimension of the inputs '
-                             'should be defined. Found `None`.')
-        input_dim = input_shape[channel_axis]
-        # kernel_shape = self.kernel_size + (input_dim, self.filters)
-        assert self.a_in + self.b_in == input_dim
-
-        left_kernel = self.add_weight(shape=(self.kernel_size % 2, input_dim, self.filters),
-                                      initializer=self.kernel_initializer,
-                                      name='center_kernel')
-        right_kernel = left_kernel[::-1, :, :]
-        right_kernel[:, -self.b_in:, :] = -right_kernel[:, -self.b_in:, :]
-        right_kernel[:, :, -self.b_out:] = -right_kernel[:, :, -self.b_out:]
-
-        # odd size
-        if self.kernel_size % 2 == 1:
-            center_kernel = self.add_weight(shape=(1, input_dim, self.filters),
-                                            initializer=self.kernel_initializer,
-                                            name='center_kernel')
-            self.kernel = K.concatenate((left_kernel, center_kernel, right_kernel), axis=0)
-
-        else:
-            self.kernel = K.concatenate((left_kernel, right_kernel), axis=0)
-
-        # For now, let's not use bias. It can be added on the a_n invariant dimensions, but not so easy to implement
-        # in Keras
-        if self.use_bias:
-            raise NotImplementedError
-            # self.bias = self.add_weight(shape=(self.filters,),
-            #                             initializer=self.bias_initializer,
-            #                             name='bias',
-            #                             regularizer=self.bias_regularizer,
-            #                             constraint=self.bias_constraint)
-        else:
-            self.bias = None
-        # Set input spec.
-        self.input_spec = InputSpec(ndim=self.rank + 2,
-                                    axes={channel_axis: input_dim})
-        self.built = True
-
-    def get_config(self):
-        config = {'a_in': self.a_in,
-                  'a_out': self.a_out,
-                  'b_in': self.b_in,
-                  'b_out': self.b_out}
-        base_config = super(IrrepToIrrepConv, self).get_config()
-        return dict(list(base_config.items()) + list(config.items()))
-
 
 
 
@@ -213,6 +141,38 @@ class WeightedSum1D(Layer):
 
 
 def get_rc_model(parameters, is_weighted_sum, use_bias=False):
+    rc_model = keras.models.Sequential()
+    rc_model.add(keras_genomics.layers.convolutional.RevCompConv1D(
+        input_shape=(1000, 4), nb_filter=16, filter_length=15))
+    rc_model.add(keras_genomics.layers.normalization.RevCompConv1DBatchNorm())
+    rc_model.add(kl.core.Activation("relu"))
+    rc_model.add(keras_genomics.layers.convolutional.RevCompConv1D(
+        nb_filter=16, filter_length=14))
+    rc_model.add(keras_genomics.layers.normalization.RevCompConv1DBatchNorm())
+    rc_model.add(kl.core.Activation("relu"))
+    rc_model.add(keras_genomics.layers.convolutional.RevCompConv1D(
+        nb_filter=16, filter_length=14))
+    rc_model.add(keras_genomics.layers.normalization.RevCompConv1DBatchNorm())
+    rc_model.add(kl.core.Activation("relu"))
+    rc_model.add(keras.layers.convolutional.MaxPooling1D(
+        pool_length=parameters['pool_size'], strides=parameters['strides']))
+    if is_weighted_sum:
+        rc_model.add(WeightedSum1D(
+            symmetric=False, input_is_revcomp_conv=True))
+        rc_model.add(kl.Dense(output_dim=1, trainable=False,
+                              init="ones"))
+    else:
+        rc_model.add(RevCompSumPool())
+        rc_model.add(Flatten())
+        rc_model.add(keras.layers.core.Dense(output_dim=1, trainable=True,
+                                             init="glorot_uniform", use_bias=use_bias))
+    rc_model.add(kl.core.Activation("sigmoid"))
+    rc_model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                     loss="binary_crossentropy", metrics=["accuracy"])
+    return rc_model
+
+
+def get_anbn(parameters, is_weighted_sum, use_bias=False):
     rc_model = keras.models.Sequential()
     rc_model.add(keras_genomics.layers.convolutional.RevCompConv1D(
         input_shape=(1000, 4), nb_filter=16, filter_length=15))

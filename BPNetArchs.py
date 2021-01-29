@@ -32,8 +32,8 @@ from tensorflow.python.ops import state_ops
 from tensorflow.python.training import training_ops
 from tensorflow.python.util.tf_export import keras_export
 
-from benchmark_optimizer import LAMBOptimizer 
-from benchmark_optimizer import AdaBound 
+# from benchmark_optimizer import LAMBOptimizer
+# from benchmark_optimizer import AdaBound
 
 
 #Loss Function
@@ -231,11 +231,11 @@ class RcBPNetArch(AbstractProfileModel):
                           loss=['mse', MultichannelMultinomialNLL(2)],
                           loss_weights=[self.c_task_weight, self.p_task_weight]) 
         elif self.optimizer == "AdaBound": 
-            model.compile(AdaBound(learning_rate = self.lr),
+            model.compile(keras.optimizers.AdaBound(learning_rate = self.lr),
                                       loss=['mse', MultichannelMultinomialNLL(2)],
                                       loss_weights=[self.c_task_weight, self.p_task_weight])
         elif self.optimizer == "LAMB":
-            model.compile(LAMBOptimizer(learning_rate=self.lr),
+            model.compile(keras.optimizers.LAMBOptimizer(learning_rate=self.lr),
                           loss=['mse', MultichannelMultinomialNLL(2)],
                           loss_weights=[self.c_task_weight, self.p_task_weight])
 
