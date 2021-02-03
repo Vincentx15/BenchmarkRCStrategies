@@ -1,41 +1,26 @@
 from keras.engine.base_layer import InputSpec
 from keras.layers.convolutional import Conv1D
+from keras.layers import Layer
 from keras import backend as K
 
 
-class RegToIrrepConv(Conv1D):
+class RegToIrrepConv(Layer):
     """
     Mapping from one irrep layer to another
     """
 
-    def __init__(self, reg_in, a_out, b_out, **kwargs):
+    def __init__(self, reg_in, a_out, b_out, kernel_size, kernel_initializer='glorot_uniform', **kwargs):
+        super(RegToIrrepConv, self).__init__()
         self.reg_in = reg_in
         self.a_out = a_out
         self.b_out = b_out
-        filters = a_out + b_out
-        super(RegToIrrepConv, self).__init__(filters=filters, **kwargs)
+        self.input_dim = 2 * reg_in
+        self.filters = a_out + b_out
 
-    def build(self, input_shape):
-        """
-        Overrides the kernel construction to build a constrained one
-        """
+        self.kernel_size = kernel_size
+        self.kernel_initializer = kernel_initializer
 
-        if self.data_format == 'channels_first':
-            channel_axis = 1
-        else:
-            channel_axis = -1
-        if input_shape[channel_axis] is None:
-            raise ValueError('The channel dimension of the inputs '
-                             'should be defined. Found `None`.')
-        input_dim = input_shape[channel_axis]
-
-        # kernel_shape = self.kernel_size[0] + (input_dim, self.filters)
-        # Filters is a_out + b_out
-
-        assert 2 * self.reg_in == input_dim
-
-
-        self.left_kernel = self.add_weight(shape=(self.kernel_size[0] // 2, input_dim, self.filters),
+        self.left_kernel = self.add_weight(shape=(self.kernel_size[0] // 2, self.input_dim, self.filters),
                                            initializer=self.kernel_initializer,
                                            name='left_kernel')
 
@@ -48,11 +33,51 @@ class RegToIrrepConv(Conv1D):
                                                 initializer=self.kernel_initializer,
                                                 name='center_kernel_br')
 
-        # For now, let's not use bias. It can be added on the a_n invariant dimensions, but not so easy to implement
-        # in Keras
-        if self.use_bias:
-            raise NotImplementedError
-        self.built = True
+    # input_shape=(1000, 4),
+    #                                      reg_in=2,
+    #                                      a_out=3,
+    #                                      b_out=0,
+    #                                      filter_length=15,
+    #                                      use_bias=False)
+
+    # def build(self, input_shape):
+    #     """
+    #     Overrides the kernel construction to build a constrained one
+    #     """
+    #
+    #     if self.data_format == 'channels_first':
+    #         channel_axis = 1
+    #     else:
+    #         channel_axis = -1
+    #     if input_shape[channel_axis] is None:
+    #         raise ValueError('The channel dimension of the inputs '
+    #                          'should be defined. Found `None`.')
+    #     input_dim = input_shape[channel_axis]
+    #
+    #     # kernel_shape = self.kernel_size[0] + (input_dim, self.filters)
+    #     # Filters is a_out + b_out
+    #
+    #     assert 2 * self.reg_in == input_dim
+    #
+    #
+    #     self.left_kernel = self.add_weight(shape=(self.kernel_size[0] // 2, input_dim, self.filters),
+    #                                        initializer=self.kernel_initializer,
+    #                                        name='left_kernel')
+    #
+    #     # odd size : To get the equality for x=0, we need to have transposed columns + flipped bor the b_out dims
+    #     if self.kernel_size[0] % 2 == 1:
+    #         self.top_left = self.add_weight(shape=(1, self.reg_in, self.a_out),
+    #                                         initializer=self.kernel_initializer,
+    #                                         name='center_kernel_tl')
+    #         self.bottom_right = self.add_weight(shape=(1, self.reg_in, self.b_out),
+    #                                             initializer=self.kernel_initializer,
+    #                                             name='center_kernel_br')
+    #
+    #     # For now, let's not use bias. It can be added on the a_n invariant dimensions, but not so easy to implement
+    #     # in Keras
+    #     if self.use_bias:
+    #         raise NotImplementedError
+    #     self.built = True
 
     def call(self, inputs):
         # Build the right part of the kernel from the left one
@@ -74,11 +99,7 @@ class RegToIrrepConv(Conv1D):
         else:
             kernel = K.concatenate((self.left_kernel, right_kernel), axis=0)
         outputs = K.conv1d(inputs,
-                           kernel,
-                           strides=self.strides[0],
-                           padding=self.padding,
-                           data_format=self.data_format,
-                           dilation_rate=self.dilation_rate[0])
+                           kernel)
         return outputs
 
     def get_config(self):
@@ -89,7 +110,7 @@ class RegToIrrepConv(Conv1D):
         return dict(list(base_config.items()) + list(config.items()))
 
 
-class IrrepToIrrepConv(Conv1D):
+class IrrepToIrrepConv(Layer):
     """
     Mapping from one irrep layer to another
     """
@@ -99,9 +120,23 @@ class IrrepToIrrepConv(Conv1D):
         self.a_out = a_out
         self.b_in = b_in
         self.b_out = b_out
-        filters = a_out + b_out
-        super(IrrepToIrrepConv, self).__init__(filters=filters, **kwargs)
+        self.input_dim = a_in + b_in
+        self.filters = a_out + b_out
+        # super(IrrepToIrrepConv, self).__init__(filters=filters, **kwargs)
 
+        self.left_kernel = self.add_weight(shape=(self.kernel_size[0] // 2, self.input_dim, self.filters),
+                                           initializer=self.kernel_initializer,
+                                           name='left_kernel')
+        # odd size
+        if self.kernel_size[0] % 2 == 1:
+            # For the kernel to be anti-symmetric, we need to have zeros on the anti-symmetric parts
+            # Here we initialize the non zero blocks
+            self.top_left = self.add_weight(shape=(1, self.a_in, self.a_out),
+                                            initializer=self.kernel_initializer,
+                                            name='center_kernel_tl')
+            self.bottom_right = self.add_weight(shape=(1, self.b_in, self.b_out),
+                                                initializer=self.kernel_initializer,
+                                                name='center_kernel_br')
 
     def build(self, input_shape):
         """
