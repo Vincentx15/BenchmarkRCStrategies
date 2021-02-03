@@ -348,9 +348,24 @@ def get_reg_model(parameters):
 
 def first_equi(parameters):
     model = keras.models.Sequential()
-    model.add(equinet.RegToIrrepConv(input_shape=(1000, 4), reg_in=2, a_out=3, b_out=2, filter_length=15, use_bias=False))
-    model.add(equinet.IrrepToIrrepConv(a_in=3, b_in=2, a_out=3, b_out=2, filter_length=15, use_bias=False))
-    model.add(equinet.IrrepToIrrepConv(a_in=3, b_in=2, a_out=3, b_out=0, filter_length=15, use_bias=False))
+    model.add(equinet.RegToIrrepConv(input_shape=(1000, 4),
+                                     reg_in=2,
+                                     a_out=3,
+                                     b_out=2,
+                                     filter_length=15,
+                                     use_bias=False))
+    model.add(equinet.IrrepToIrrepConv(a_in=3,
+                                       b_in=2,
+                                       a_out=3,
+                                       b_out=2,
+                                       filter_length=15,
+                                       use_bias=False))
+    model.add(equinet.IrrepToIrrepConv(a_in=3,
+                                       b_in=2,
+                                       a_out=3,
+                                       b_out=0,
+                                       filter_length=15,
+                                       use_bias=False))
     model.add(keras.layers.convolutional.MaxPooling1D(pool_length=parameters['pool_size'],
                                                       strides=parameters['strides']))
     model.add(Flatten())
