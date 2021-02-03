@@ -36,6 +36,8 @@ from seqdataloader.batchproducers.coordbased import coordbatchtransformers
 
 import equinet
 
+tf.enable_eager_execution()
+
 TF = 'CTCF'
 
 valid_data_loader = momma_dragonn.data_loaders.hdf5_data_loader.MultimodalAtOnceDataLoader(
@@ -348,12 +350,10 @@ def get_reg_model(parameters):
 
 def first_equi(parameters):
     model = keras.models.Sequential()
-    model.add(equinet.RegToIrrepConv(input_shape=(1000, 4),
-                                     reg_in=2,
+    model.add(equinet.RegToIrrepConv(reg_in=2,
                                      a_out=3,
                                      b_out=0,
-                                     filter_length=15,
-                                     use_bias=False))
+                                     kernel_size=15))
     # model.add(equinet.IrrepToIrrepConv(a_in=3,
     #                                    b_in=2,
     #                                    a_out=3,
@@ -366,12 +366,13 @@ def first_equi(parameters):
     #                                    b_out=0,
     #                                    filter_length=15,
     #                                    use_bias=False))
-    model.add(keras.layers.convolutional.MaxPooling1D(pool_length=parameters['pool_size'],
-                                                      strides=parameters['strides']))
-    model.add(Flatten())
-    model.add(keras.layers.core.Dense(output_dim=1, trainable=True,
-                                      init="glorot_uniform"))
-    model.add(keras.layers.core.Activation("sigmoid"))
+    # model.add(keras.layers.convolutional.MaxPooling1D(pool_length=parameters['pool_size'],
+    #                                                   strides=parameters['strides']))
+    # model.add(Flatten())
+    # model.add(keras.layers.core.Dense(output_dim=1, trainable=True,
+    #                                   init="glorot_uniform"))
+    # model.add(keras.layers.core.Activation("sigmoid"))
+    # )
 
     model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
 
@@ -453,21 +454,33 @@ def train_model(model, curr_seed, train_data_loader, batch_generator,
         return auroc_callback, history, model
 
 
-auroc_callback, history, model = train_model(model=model,
-                                             curr_seed=1234,
-                                             train_data_loader=None,
-                                             batch_generator=standard_train_batch_generator,
-                                             valid_data=valid_data,
-                                             epochs_to_train_for=epochs_to_train_for,
-                                             upsampling=True)
+model = equinet.EquiNet()
+# gen = iter(standard_train_batch_generator)
+# a ,b = next(gen)
+# print(a)
+# print(type(a))
+cal = lambda :standard_train_batch_generator
 
-model.set_weights(auroc_callback.best_weights)
-print("Validation set AUROC with best-loss early stopping:",
-      roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
-print("Test set AUROC with best-loss early stopping:",
-      roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))
-model.set_weights(auroc_callback.best_weights)
-print("Validation AUROC at best-auroc early stopping:",
-      roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
-print("Test set AUROC at best-auroc early stopping:",
-      roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))
+train_dataset = tf.data.Dataset.from_generator(cal, (tf.float32, tf.float32))
+
+for batch in train_dataset:
+    print(type(batch[0]))
+    model(batch[0])
+# auroc_callback, history, model = train_model(model=model,
+#                                              curr_seed=1234,
+#                                              train_data_loader=None,
+#                                              batch_generator=standard_train_batch_generator,
+#                                              valid_data=valid_data,
+#                                              epochs_to_train_for=epochs_to_train_for,
+#                                              upsampling=True)
+#
+# model.set_weights(auroc_callback.best_weights)
+# print("Validation set AUROC with best-loss early stopping:",
+#       roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
+# print("Test set AUROC with best-loss early stopping:",
+#       roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))
+# model.set_weights(auroc_callback.best_weights)
+# print("Validation AUROC at best-auroc early stopping:",
+#       roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
+# print("Test set AUROC at best-auroc early stopping:",
+#       roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))

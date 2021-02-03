@@ -42,7 +42,6 @@ class RevCompSumPool(Layer):
         return (input_shape[0], input_shape[1], int(input_shape[2] / 2))
 
 
-
 class WeightedSum1D(Layer):
     '''Learns a weight for each position, for each channel, and sums
     lengthwise.
@@ -172,36 +171,46 @@ def get_rc_model(parameters, is_weighted_sum, use_bias=False):
     return rc_model
 
 
-def get_anbn(parameters, is_weighted_sum, use_bias=False):
-    rc_model = keras.models.Sequential()
-    rc_model.add(keras_genomics.layers.convolutional.RevCompConv1D(
-        input_shape=(1000, 4), nb_filter=16, filter_length=15))
-    rc_model.add(keras_genomics.layers.normalization.RevCompConv1DBatchNorm())
-    rc_model.add(kl.core.Activation("relu"))
-    rc_model.add(keras_genomics.layers.convolutional.RevCompConv1D(
-        nb_filter=16, filter_length=14))
-    rc_model.add(keras_genomics.layers.normalization.RevCompConv1DBatchNorm())
-    rc_model.add(kl.core.Activation("relu"))
-    rc_model.add(keras_genomics.layers.convolutional.RevCompConv1D(
-        nb_filter=16, filter_length=14))
-    rc_model.add(keras_genomics.layers.normalization.RevCompConv1DBatchNorm())
-    rc_model.add(kl.core.Activation("relu"))
-    rc_model.add(keras.layers.convolutional.MaxPooling1D(
-        pool_length=parameters['pool_size'], strides=parameters['strides']))
-    if is_weighted_sum:
-        rc_model.add(WeightedSum1D(
-            symmetric=False, input_is_revcomp_conv=True))
-        rc_model.add(kl.Dense(output_dim=1, trainable=False,
-                              init="ones"))
-    else:
-        rc_model.add(RevCompSumPool())
-        rc_model.add(Flatten())
-        rc_model.add(keras.layers.core.Dense(output_dim=1, trainable=True,
-                                             init="glorot_uniform", use_bias=use_bias))
-    rc_model.add(kl.core.Activation("sigmoid"))
-    rc_model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
-                     loss="binary_crossentropy", metrics=["accuracy"])
-    return rc_model
+import equinet
+
+
+class EquiNet(keras.Model):
+
+    def __init__(self, filters=[(2, 2), (2, 2), (2, 0)], kernel_sizes=[5, 5, 10, 10]):
+        """
+        First map the regular representation to irrep setting
+        Then goes from one setting to another.
+        filters
+        """
+        super(EquiNet, self).__init__()
+
+        assert len(filters) + 1 == len(kernel_sizes)
+
+        first_kernel_size = kernel_sizes[0]
+        first_a, first_b = filters[0]
+        self.reg_irrep = equinet.RegToIrrepConv(reg_in=2,
+                                                a_out=first_a,
+                                                b_out=first_b,
+                                                kernel_size=first_kernel_size)
+        self.irrep_layers = []
+        for i in range(1, len(filters)):
+            prev_a, prev_b = filters[i - 1]
+            next_a, next_b = filters[i]
+            self.irrep_layers.append(equinet.IrrepToIrrepConv(
+                a_in=prev_a,
+                b_in=prev_b,
+                a_out=next_a,
+                b_out=next_b,
+                kernel_size=kernel_sizes[i],
+            ))
+
+    def call(self, inputs):
+        x = self.reg_irrep(inputs)
+
+        for irrep_layer in self.irrep_layers:
+            x = irrep_layer(x)
+
+        return x
 
 
 def get_reg_model(parameters):
