@@ -117,11 +117,9 @@ class AuRocCallback(keras.callbacks.Callback):
             self.best_auroc_sofar = auroc
 
 
-def train_model(model_wrapper, aug, curr_seed, batch_size, x, y, val_data):
+def train_model(model, aug, curr_seed, batch_size, x, y, val_data):
     np.random.seed(curr_seed)
     tf.set_random_seed(curr_seed)
-
-    model = model_wrapper.get_model()
 
     if aug == "rev_after_each":
         x_train = np.asarray([val for val in x for __ in (0, 1)])
@@ -151,7 +149,7 @@ def train_model(model_wrapper, aug, curr_seed, batch_size, x, y, val_data):
               callbacks=[early_stopping_callback, auroc_callback],
               batch_size=batch_size, epochs=200)
 
-    return model, early_stopping_callback, auroc_callback
+    return early_stopping_callback, auroc_callback
 
 
 def save_all(filepath, model_arch, curr_seed, callback, model, val_data):
