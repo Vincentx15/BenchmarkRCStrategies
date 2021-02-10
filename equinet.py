@@ -298,8 +298,6 @@ class IrrepToIrrepConv(Layer):
                 # going from abs -> as
                 else:
                     top_right = K.zeros(shape=(1, self.b_in, self.a_out))
-                    print(top_right.shape)
-                    print(self.top_left.shape)
                     center_kernel = K.concatenate((self.top_left, top_right), axis=1)
 
             else:
@@ -309,8 +307,6 @@ class IrrepToIrrepConv(Layer):
                 left = K.concatenate((self.top_left, bottom_left), axis=2)
                 right = K.concatenate((top_right, self.bottom_right), axis=2)
                 center_kernel = K.concatenate((left, right), axis=1)
-            print(self.left_kernel.shape)
-            print(center_kernel.shape)
             kernel = K.concatenate((self.left_kernel, center_kernel, right_kernel), axis=0)
 
         else:
@@ -332,7 +328,7 @@ class IrrepToIrrepConv(Layer):
 
 class EquiNet(Layer):
 
-    def __init__(self, filters=[(2, 2), (2, 2), (2, 2), (1, 0)], kernel_sizes=[5, 5, 7, 7, 5], out_size=1):
+    def __init__(self, filters=[(2, 2), (2, 2), (2, 2), (1, 0)], kernel_sizes=[5, 5, 7, 7], out_size=1):
         """
         First map the regular representation to irrep setting
         Then goes from one setting to another.
@@ -340,8 +336,10 @@ class EquiNet(Layer):
         """
         super(EquiNet, self).__init__()
 
-        assert len(filters) + 1 == len(kernel_sizes)
-        self.input_dense = 1000
+        assert len(filters) == len(kernel_sizes)
+        # self.input_dense = 1000
+        successive_shrinking = (i - 1 for i in kernel_sizes)
+        self.input_dense = 1000 - sum(successive_shrinking)
 
         first_kernel_size = kernel_sizes[0]
         first_a, first_b = filters[0]
@@ -361,11 +359,10 @@ class EquiNet(Layer):
                 kernel_size=kernel_sizes[i],
             ))
 
-        self.dense = Dense(1, input_dim=self.input_dense)
+        self.dense = Dense(out_size, input_dim=self.input_dense)
 
     def call(self, inputs):
         x = self.reg_irrep(inputs)
-
         # rcinputs = inputs[:, ::-1, ::-1]
         # rcx = self.reg_irrep(rcinputs)
 
@@ -425,6 +422,7 @@ if __name__ == '__main__':
             for item in (self[i] for i in range(len(self))):
                 yield item
 
+
     a_1 = 1
     b_1 = 1
     a_2 = 1
@@ -453,26 +451,29 @@ if __name__ == '__main__':
     # model = reg_irrep
     # model = irrep_irrep
     # model = reg_reg
-    # model = whole
+    model = whole
     from keras_genomics.layers import RevCompConv1D
 
     # model = RevCompConv1D(3,10)
 
+    # x = tf.random.uniform((1, 1000, 4))
+    # x2 = x[:, ::-1, ::-1]
+    # out1 = reg_irrep(x)
+    # out1 = irrep_irrep(out1)
+    # out2 = reg_irrep(x2)
+    # out2 = irrep_irrep(out2)
+    # print(out1[0, :5, :].numpy())
+    # print('reversed')
+    # print(out2[0, -5:, :].numpy()[::-1])
 
-
-    x = tf.random.uniform((1, 1000, 4))
-    x2 = x[:, ::-1, ::-1]
-    out1 = reg_irrep(x)
-    out1 = irrep_irrep(out1)
-    out2 = reg_irrep(x2)
-    out2 = irrep_irrep(out2)
-
-    print(out1.shape)
-
-    print(out1[0, :5, :].numpy())
-    print('reversed')
-    print(out2[0, -5:, :].numpy()[::-1])
-    # print(out2[0, -5:, ::-1].numpy()[::-1])
+    # x = tf.random.uniform((1, 1000, 4))
+    # x2 = x[:, ::-1, ::-1]
+    # out1 = model(x)
+    # out2 = model(x2)
+    #
+    # print(out1.numpy())
+    # print('reversed')
+    # print(out2.numpy()[::-1])
 
     import sys
 
