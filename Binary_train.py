@@ -6,10 +6,13 @@ from sklearn.metrics import roc_auc_score
 
 import tensorflow as tf
 
+tf.enable_eager_execution()
+
 import keras
 from keras import backend as K
 from keras.layers.core import Dropout
 from keras.layers.core import Flatten
+from keras.callbacks import History
 from keras.engine import Layer
 from keras.models import Sequential
 import keras.layers as kl
@@ -35,22 +38,6 @@ from seqdataloader.batchproducers.coordbased import coordbatchtransformers
 # from seqdataloader.batchproducers.coordbased.coordbatchtransformers import get_revcomp
 
 import equinet
-
-tf.enable_eager_execution()
-
-TF = 'CTCF'
-
-valid_data_loader = momma_dragonn.data_loaders.hdf5_data_loader.MultimodalAtOnceDataLoader(
-    path_to_hdf5=f"data/{TF}/valid_data.hdf5", strip_enclosing_dictionary=True)
-valid_data = valid_data_loader.get_data()
-
-test_data_loader = momma_dragonn.data_loaders.hdf5_data_loader.MultimodalAtOnceDataLoader(
-    path_to_hdf5=f"data/{TF}/test_data.hdf5", strip_enclosing_dictionary=True)
-test_data = test_data_loader.get_data()
-
-Coordinates = namedtuple("Coordinates",
-                         ["chrom", "start", "end", "isplusstrand"])
-Coordinates.__new__.__defaults__ = (True,)
 
 
 def apply_mask(tomask, mask):
@@ -244,6 +231,11 @@ class AbstractSingleNdarrayCoordsToVals(CoordsToVals):
             return {self.mode_name: ndarray}
 
 
+Coordinates = namedtuple("Coordinates",
+                         ["chrom", "start", "end", "isplusstrand"])
+Coordinates.__new__.__defaults__ = (True,)
+
+
 class SimpleLookup(AbstractSingleNdarrayCoordsToVals):
 
     def __init__(self, lookup_file,
@@ -379,25 +371,6 @@ def first_equi(parameters):
     return model
 
 
-parameters = {
-    'filters': 16,
-    'input_length': 1000,
-    'pool_size': 40,
-    'strides': 20
-}
-
-# model = get_reg_model(parameters)
-model = first_equi(parameters)
-
-epochs_to_train_for = 160
-standard_train_batch_generator = get_generators(TF=TF,
-                                                seq_len=1000,
-                                                curr_seed=1234,
-                                                is_aug=False)
-
-from keras.callbacks import History
-
-
 class AuRocCallback(keras.callbacks.Callback):
     def __init__(self, model, valid_X, valid_Y):
         self.model = model
@@ -454,33 +427,112 @@ def train_model(model, curr_seed, train_data_loader, batch_generator,
         return auroc_callback, history, model
 
 
-model = equinet.EquiNet()
-# gen = iter(standard_train_batch_generator)
-# a ,b = next(gen)
-# print(a)
-# print(type(a))
-cal = lambda :standard_train_batch_generator
+class AuRocNoCallback():
+    def __init__(self, model, valid_X, valid_Y):
+        self.model = model
+        self.valid_X = valid_X
+        self.valid_Y = valid_Y
+        self.best_auroc_sofar = 0.0
+        self.best_weights = None
+        self.best_epoch_number = 0
 
-train_dataset = tf.data.Dataset.from_generator(cal, (tf.float32, tf.float32))
+    def on_epoch_end(self, epoch):
+        preds = self.model.predict(self.valid_X)
+        auroc = roc_auc_score(y_true=self.valid_Y, y_score=preds)
+        if auroc > self.best_auroc_sofar:
+            self.best_weights = self.model.get_weights()
+            self.best_epoch_number = epoch
+            self.best_auroc_sofar = auroc
+        return auroc
 
-for batch in train_dataset:
-    print(type(batch[0]))
-    model(batch[0])
-# auroc_callback, history, model = train_model(model=model,
-#                                              curr_seed=1234,
-#                                              train_data_loader=None,
-#                                              batch_generator=standard_train_batch_generator,
-#                                              valid_data=valid_data,
-#                                              epochs_to_train_for=epochs_to_train_for,
-#                                              upsampling=True)
-#
-# model.set_weights(auroc_callback.best_weights)
-# print("Validation set AUROC with best-loss early stopping:",
-#       roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
-# print("Test set AUROC with best-loss early stopping:",
-#       roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))
-# model.set_weights(auroc_callback.best_weights)
-# print("Validation AUROC at best-auroc early stopping:",
-#       roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
-# print("Test set AUROC at best-auroc early stopping:",
-#       roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))
+
+def eager_train_step(model, inputs, target,
+                     optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+                     loss_fn=tf.keras.losses.binary_crossentropy,
+                     metrics="accuracy"):
+    with tf.GradientTape() as tape:
+        pred = model(inputs)
+        loss = loss_fn(target, pred)
+        grads = tape.gradient(loss, model.trainable_weights)
+
+    optimizer.apply_gradients(zip(grads, model.trainable_weights))
+    return loss
+
+
+def eager_train(model,
+                train_dataset,
+                validation_object,
+                optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+                loss_fn=tf.keras.losses.MeanSquaredError(),
+                metrics="accuracy",
+                epochs_to_train_for=10):
+    """
+    Model : a keras model to be run on eager
+    train_dataset : a tf.data
+    validation_object : an instance of AuRocNoCallback
+    """
+    # total_batch = len(train_dataset)
+    total_batch = 10
+    for epoch in range(epochs_to_train_for):
+        for batch_idx, (batch_in, batch_out) in enumerate(train_dataset):
+            loss = eager_train_step(model,
+                                    inputs=batch_in,
+                                    target=batch_out,
+                                    optimizer=optimizer,
+                                    loss_fn=loss_fn,
+                                    metrics=metrics)
+            print(loss.numpy().item(), batch_idx, total_batch)
+            break
+        # auroc = validation_object.on_epoch_end(epoch=epoch)
+        # print(auroc)
+
+
+if __name__ == '__main__':
+    TF = 'CTCF'
+
+    valid_data_loader = momma_dragonn.data_loaders.hdf5_data_loader.MultimodalAtOnceDataLoader(
+        path_to_hdf5=f"data/{TF}/valid_data.hdf5", strip_enclosing_dictionary=True)
+    valid_data = valid_data_loader.get_data()
+
+    test_data_loader = momma_dragonn.data_loaders.hdf5_data_loader.MultimodalAtOnceDataLoader(
+        path_to_hdf5=f"data/{TF}/test_data.hdf5", strip_enclosing_dictionary=True)
+    test_data = test_data_loader.get_data()
+    parameters = {
+        'filters': 16,
+        'input_length': 1000,
+        'pool_size': 40,
+        'strides': 20
+    }
+    epochs_to_train_for = 160
+    standard_train_batch_generator = get_generators(TF=TF,
+                                                    seq_len=1000,
+                                                    curr_seed=1234,
+                                                    is_aug=False)
+
+    # model = get_reg_model(parameters)
+    # model = first_equi(parameters)
+    model = equinet.EquiNet()
+
+    cal = lambda: standard_train_batch_generator
+    train_dataset = tf.data.Dataset.from_generator(cal, (tf.float32, tf.float32))
+    valid_obj = AuRocNoCallback(model=model, valid_X=valid_data.X, valid_Y=valid_data.Y)
+    eager_train(model=model, train_dataset=train_dataset, validation_object=valid_obj)
+
+    # auroc_callback, history, model = train_model(model=model,
+    #                                              curr_seed=1234,
+    #                                              train_data_loader=None,
+    #                                              batch_generator=standard_train_batch_generator,
+    #                                              valid_data=valid_data,
+    #                                              epochs_to_train_for=epochs_to_train_for,
+    #                                              upsampling=True)
+    #
+    # model.set_weights(auroc_callback.best_weights)
+    # print("Validation set AUROC with best-loss early stopping:",
+    #       roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
+    # print("Test set AUROC with best-loss early stopping:",
+    #       roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))
+    # model.set_weights(auroc_callback.best_weights)
+    # print("Validation AUROC at best-auroc early stopping:",
+    #       roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
+    # print("Test set AUROC at best-auroc early stopping:",
+    #       roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))
