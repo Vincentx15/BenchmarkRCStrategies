@@ -6,7 +6,7 @@ from sklearn.metrics import roc_auc_score
 
 import tensorflow as tf
 
-tf.enable_eager_execution()
+# tf.enable_eager_execution()
 
 import keras
 from keras import backend as K
@@ -340,37 +340,6 @@ def get_reg_model(parameters):
     return model
 
 
-def first_equi(parameters):
-    model = keras.models.Sequential()
-    model.add(equinet.RegToIrrepConv(reg_in=2,
-                                     a_out=3,
-                                     b_out=0,
-                                     kernel_size=15))
-    # model.add(equinet.IrrepToIrrepConv(a_in=3,
-    #                                    b_in=2,
-    #                                    a_out=3,
-    #                                    b_out=2,
-    #                                    filter_length=15,
-    #                                    use_bias=False))
-    # model.add(equinet.IrrepToIrrepConv(a_in=3,
-    #                                    b_in=2,
-    #                                    a_out=3,
-    #                                    b_out=0,
-    #                                    filter_length=15,
-    #                                    use_bias=False))
-    # model.add(keras.layers.convolutional.MaxPooling1D(pool_length=parameters['pool_size'],
-    #                                                   strides=parameters['strides']))
-    # model.add(Flatten())
-    # model.add(keras.layers.core.Dense(output_dim=1, trainable=True,
-    #                                   init="glorot_uniform"))
-    # model.add(keras.layers.core.Activation("sigmoid"))
-    # )
-
-    model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
-
-    return model
-
-
 class AuRocCallback(keras.callbacks.Callback):
     def __init__(self, model, valid_X, valid_Y):
         self.model = model
@@ -510,29 +479,31 @@ if __name__ == '__main__':
                                                     is_aug=False)
 
     # model = get_reg_model(parameters)
-    # model = first_equi(parameters)
-    model = equinet.EquiNet()
+    model = equinet.EquiNet(filters=[(8,8), (8,8), (8,8)], kernel_sizes=[15,14,13])
+    model = model.func_api_model()
+    model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                  loss="binary_crossentropy", metrics=["accuracy"])
 
-    cal = lambda: standard_train_batch_generator
-    train_dataset = tf.data.Dataset.from_generator(cal, (tf.float32, tf.float32))
-    valid_obj = AuRocNoCallback(model=model, valid_X=valid_data.X, valid_Y=valid_data.Y)
-    eager_train(model=model, train_dataset=train_dataset, validation_object=valid_obj)
+    # cal = lambda: standard_train_batch_generator
+    # train_dataset = tf.data.Dataset.from_generator(cal, (tf.float32, tf.float32))
+    # valid_obj = AuRocNoCallback(model=model, valid_X=valid_data.X, valid_Y=valid_data.Y)
+    # eager_train(model=model, train_dataset=train_dataset, validation_object=valid_obj)
 
-    # auroc_callback, history, model = train_model(model=model,
-    #                                              curr_seed=1234,
-    #                                              train_data_loader=None,
-    #                                              batch_generator=standard_train_batch_generator,
-    #                                              valid_data=valid_data,
-    #                                              epochs_to_train_for=epochs_to_train_for,
-    #                                              upsampling=True)
-    #
-    # model.set_weights(auroc_callback.best_weights)
-    # print("Validation set AUROC with best-loss early stopping:",
-    #       roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
-    # print("Test set AUROC with best-loss early stopping:",
-    #       roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))
-    # model.set_weights(auroc_callback.best_weights)
-    # print("Validation AUROC at best-auroc early stopping:",
-    #       roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
-    # print("Test set AUROC at best-auroc early stopping:",
-    #       roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))
+    auroc_callback, history, model = train_model(model=model,
+                                                 curr_seed=1234,
+                                                 train_data_loader=None,
+                                                 batch_generator=standard_train_batch_generator,
+                                                 valid_data=valid_data,
+                                                 epochs_to_train_for=epochs_to_train_for,
+                                                 upsampling=True)
+
+    model.set_weights(auroc_callback.best_weights)
+    print("Validation set AUROC with best-loss early stopping:",
+          roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
+    print("Test set AUROC with best-loss early stopping:",
+          roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))
+    model.set_weights(auroc_callback.best_weights)
+    print("Validation AUROC at best-auroc early stopping:",
+          roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
+    print("Test set AUROC at best-auroc early stopping:",
+          roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))

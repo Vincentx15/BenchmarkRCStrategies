@@ -171,48 +171,6 @@ def get_rc_model(parameters, is_weighted_sum, use_bias=False):
     return rc_model
 
 
-import equinet
-
-
-class EquiNet(keras.Model):
-
-    def __init__(self, filters=[(2, 2), (2, 2), (2, 0)], kernel_sizes=[5, 5, 10, 10]):
-        """
-        First map the regular representation to irrep setting
-        Then goes from one setting to another.
-        filters
-        """
-        super(EquiNet, self).__init__()
-
-        assert len(filters) + 1 == len(kernel_sizes)
-
-        first_kernel_size = kernel_sizes[0]
-        first_a, first_b = filters[0]
-        self.reg_irrep = equinet.RegToIrrepConv(reg_in=2,
-                                                a_out=first_a,
-                                                b_out=first_b,
-                                                kernel_size=first_kernel_size)
-        self.irrep_layers = []
-        for i in range(1, len(filters)):
-            prev_a, prev_b = filters[i - 1]
-            next_a, next_b = filters[i]
-            self.irrep_layers.append(equinet.IrrepToIrrepConv(
-                a_in=prev_a,
-                b_in=prev_b,
-                a_out=next_a,
-                b_out=next_b,
-                kernel_size=kernel_sizes[i],
-            ))
-
-    def call(self, inputs):
-        x = self.reg_irrep(inputs)
-
-        for irrep_layer in self.irrep_layers:
-            x = irrep_layer(x)
-
-        return x
-
-
 def get_reg_model(parameters):
     model = keras.models.Sequential()
     model.add(keras.layers.Convolution1D(

@@ -6,8 +6,9 @@ tf.get_logger().setLevel('INFO')
 
 import keras
 from keras import backend as K
-from keras.layers import Layer, Dense
+from keras.layers import Layer
 import keras.layers as kl
+import keras.activations as ka
 
 import numpy as np
 
@@ -382,19 +383,32 @@ class ActivationLayer(Layer):
             b_outputs = tf.tanh(b_inputs)
             if a_outputs is not None:
                 return K.concatenate((a_outputs, b_outputs), axis=-1)
+            else:
+                return b_outputs
         return a_outputs
 
 
 class ConcatLayer(Layer):
     """
-    Mapping from one irrep layer to another
+    Create an invariant mapping that pools the negative dimensions
     """
 
-    def __init__(self):
+    def __init__(self, a, b):
         super(ConcatLayer, self).__init__()
+        self.a = a
+        self.b = b
 
     def call(self, inputs):
-        return inputs + inputs[:, ::-1, :]
+        a_outputs = None
+        if self.a > 0:
+            a_outputs = inputs[:, :, :self.a]
+        if self.b > 0:
+            b_outputs = (inputs[:, :, self.a:] + inputs[:, ::-1, self.a:]) / 2
+            if a_outputs is not None:
+                return K.concatenate((a_outputs, b_outputs), axis=-1)
+            else:
+                return b_outputs
+        return a_outputs
 
 
 class EquiNet():
@@ -419,6 +433,9 @@ class EquiNet():
                                         b_out=first_b,
                                         kernel_size=first_kernel_size)
         self.irrep_layers = []
+        self.activation_layers = []
+        self.last_a, self.last_b = filters[-1]
+
         for i in range(1, len(filters)):
             prev_a, prev_b = filters[i - 1]
             next_a, next_b = filters[i]
@@ -429,34 +446,13 @@ class EquiNet():
                 b_out=next_b,
                 kernel_size=kernel_sizes[i],
             ))
+            self.activation_layers.append(ActivationLayer(
+                a=next_a,
+                b=next_b,
+            ))
 
         self.flattener = kl.Flatten()
-        self.dense = Dense(out_size, input_dim=self.input_dense)
-
-    def call(self, inputs):
-        x = self.reg_irrep(inputs)
-        # rcinputs = inputs[:, ::-1, ::-1]
-        # rcx = self.reg_irrep(rcinputs)
-
-        for irrep_layer in self.irrep_layers:
-            x = irrep_layer(x)
-
-            # rcx = irrep_layer(rcx)
-            # print('first')
-            # print(x[0, :5, :].numpy())
-            # print('reversed')
-            # print(rcx[0, -5:, :].numpy()[::-1])
-
-        # Average two strands predictions
-        x = x + x[:, ::-1, :]
-
-        # Fla
-        bs = tf.shape(x)[0]
-        x = tf.reshape(x, (bs, -1))
-        length = tf.shape(x)[1].numpy().item()
-        assert length == self.input_dense
-        x = self.dense(x)
-        return x
+        self.dense = kl.Dense(out_size, input_dim=self.input_dense, activation='sigmoid')
 
     def func_api_model(self):
         inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
@@ -464,11 +460,12 @@ class EquiNet():
         # rcinputs = inputs[:, ::-1, ::-1]
         # rcx = self.reg_irrep(rcinputs)
 
-        for irrep_layer in self.irrep_layers:
+        for irrep_layer, activation_layer in zip(self.irrep_layers, self.activation_layers):
             x = irrep_layer(x)
+            x = activation_layer(x)
 
         # Average two strands predictions
-        x = ConcatLayer()(x)
+        x = ConcatLayer(a=self.last_a, b=self.last_b)(x)
         # x = x + x[:, ::-1, :]
 
         # x_shape = x.shape.as_list()
@@ -480,21 +477,10 @@ class EquiNet():
         # assert length == self.input_dense
         # print(x_shape)
 
-        print(x.shape)
         x = self.flattener(x)
-        print(x.shape)
         outputs = self.dense(x)
         model = keras.Model(inputs, outputs)
         return model
-
-
-def training_step(model, input, target):
-    with tf.GradientTape() as tape:
-        pred = model(input)
-        loss = loss_fn(target, pred)
-        grads = tape.gradient(loss, model.trainable_weights)
-    optimizer.apply_gradients(zip(grads, model.trainable_weights))
-    return loss
 
 
 if __name__ == '__main__':
@@ -502,7 +488,7 @@ if __name__ == '__main__':
     import tensorflow as tf
     from keras.utils import Sequence
 
-    eager = True
+    eager = False
     if eager:
         tf.enable_eager_execution()
 
@@ -547,8 +533,8 @@ if __name__ == '__main__':
     a_2 = 2
     b_2 = 1
 
-    generator = Generator(outfeat=3, outlen=993, eager=eager)
-    # generator = Generator(binary=True)
+    # generator = Generator(outfeat=3, outlen=993, eager=eager)
+    generator = Generator(binary=True)
     # inputs, targets = generator[2]
     # print(inputs.shape)
     # print(targets.shape)
@@ -585,29 +571,35 @@ if __name__ == '__main__':
     # model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
     # model.fit_generator(generator)
 
+    model = EquiNet().func_api_model()
+
     # from keras_genomics.layers import RevCompConv1D
-    # model = whole.func_api_model()
     # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
     #               loss="binary_crossentropy",
     #               metrics=["accuracy"])
 
     # model = RevCompConv1D(3,10)
+    # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+    # outputs = reg_irrep(inputs)
+    # outputs = ActivationLayer(a_1, b_1)(outputs)
+    # model = keras.Model(inputs, outputs)
 
-    x = tf.random.uniform((1, 1000, 4))
-    x2 = x[:, ::-1, ::-1]
-    out1 = reg_irrep(x)
+    # x = tf.random.uniform((1, 1000, 4))
+    # print(x[0, :5, :].numpy())
+    # x2 = x[:, ::-1, ::-1]
+    # out1 = reg_irrep(x)
     # print(out1.shape)
     # out1 = irrep_irrep(out1)
-    out2 = reg_irrep(x2)
+    # out2 = reg_irrep(x2)
     # out2 = irrep_irrep(out2)
     # print(out1[0, :5, :].numpy())
-    out1 = ActivationLayer(a_1, b_1)(out1)
-    out2 = ActivationLayer(a_1, b_1)(out2)
-
-    print(out1[0, :5, :].numpy())
-    print('reversed')
-    print(out2[0, -5:, :].numpy()[::-1])
+    # out1 = ActivationLayer(a_1, b_1)(out1)
+    # out2 = ActivationLayer(a_1, b_1)(out2)
     #
+    # print(out1[0, :5, :].numpy())
+    # print('reversed')
+    # print(out2[0, -5:, :].numpy()[::-1])
+    # #
     # x = tf.random.uniform((1, 1000, 4))
     # x2 = x[:, ::-1, ::-1]
     # out1 = model(x)
@@ -616,21 +608,3 @@ if __name__ == '__main__':
     # print(out1.numpy())
     # print('reversed')
     # print(out2.numpy()[::-1])
-
-    import sys
-
-    sys.exit()
-
-    loss_fn = tf.keras.losses.MeanSquaredError()
-    optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
-
-    # input, target = generator.__getitem__(1)
-    # for i in range(10):
-    #     training_step(model, input, target)
-    #
-    # gen = iter([i for i in range(10)])
-    cal = lambda: generator
-    train_dataset = tf.data.Dataset.from_generator(cal, (tf.float32, tf.float32))
-    for batch in train_dataset:
-        print(type(batch[0]))
-        model(batch[0])
