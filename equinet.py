@@ -1,9 +1,15 @@
+import os
+import tensorflow as tf
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+tf.get_logger().setLevel('INFO')
+
 import keras
 from keras import backend as K
 from keras.layers import Layer, Dense
 import keras.layers as kl
 
-import tensorflow as tf
+import numpy as np
 
 
 class RegToRegConv(Layer):
@@ -11,7 +17,9 @@ class RegToRegConv(Layer):
     Mapping from one reg layer to another
     """
 
-    def __init__(self, reg_in, reg_out, kernel_size, kernel_initializer='glorot_uniform'):
+    def __init__(self, reg_in, reg_out, kernel_size,
+                 padding='valid',
+                 kernel_initializer='glorot_uniform'):
         super(RegToRegConv, self).__init__()
         self.reg_in = reg_in
         self.reg_out = reg_out
@@ -20,6 +28,7 @@ class RegToRegConv(Layer):
 
         self.kernel_size = kernel_size
         self.kernel_initializer = kernel_initializer
+        self.padding = padding
 
         self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
                                            initializer=self.kernel_initializer,
@@ -49,7 +58,7 @@ class RegToRegConv(Layer):
             kernel = K.concatenate((self.left_kernel, right_kernel), axis=0)
         outputs = K.conv1d(inputs,
                            kernel,
-                           padding='valid')
+                           padding=self.padding)
         return outputs
 
     def get_config(self):
@@ -59,13 +68,22 @@ class RegToRegConv(Layer):
         base_config = super(RegToIrrepConv, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
+    def compute_output_shape(self, input_shape):
+        length = input_shape[1]
+        if self.padding == 'valid':
+            return None, length - self.kernel_size + 1, self.filters
+        if self.padding == 'same':
+            return None, length, self.filters
+
 
 class RegToIrrepConv(Layer):
     """
     Mapping from one irrep layer to another
     """
 
-    def __init__(self, reg_in, a_out, b_out, kernel_size, kernel_initializer='glorot_uniform'):
+    def __init__(self, reg_in, a_out, b_out, kernel_size,
+                 padding='valid',
+                 kernel_initializer='glorot_uniform'):
         super(RegToIrrepConv, self).__init__()
         self.reg_in = reg_in
         self.a_out = a_out
@@ -75,6 +93,7 @@ class RegToIrrepConv(Layer):
 
         self.kernel_size = kernel_size
         self.kernel_initializer = kernel_initializer
+        self.padding = padding
 
         self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
                                            initializer=self.kernel_initializer,
@@ -125,7 +144,7 @@ class RegToIrrepConv(Layer):
             kernel = K.concatenate((self.left_kernel, right_kernel), axis=0)
         outputs = K.conv1d(inputs,
                            kernel,
-                           padding='valid')
+                           padding=self.padding)
         return outputs
 
     def get_config(self):
@@ -135,13 +154,22 @@ class RegToIrrepConv(Layer):
         base_config = super(RegToIrrepConv, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
+    def compute_output_shape(self, input_shape):
+        length = input_shape[1]
+        if self.padding == 'valid':
+            return None, length - self.kernel_size + 1, self.filters
+        if self.padding == 'same':
+            return None, length, self.filters
+
 
 class IrrepToIrrepConv(Layer):
     """
     Mapping from one irrep layer to another
     """
 
-    def __init__(self, a_in, a_out, b_in, b_out, kernel_size, kernel_initializer='glorot_uniform'):
+    def __init__(self, a_in, a_out, b_in, b_out, kernel_size,
+                 padding='valid',
+                 kernel_initializer='glorot_uniform'):
         super(IrrepToIrrepConv, self).__init__()
 
         self.a_in = a_in
@@ -153,6 +181,7 @@ class IrrepToIrrepConv(Layer):
 
         self.kernel_size = kernel_size
         self.kernel_initializer = kernel_initializer
+        self.padding = padding
 
         self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
                                            initializer=self.kernel_initializer,
@@ -314,7 +343,7 @@ class IrrepToIrrepConv(Layer):
 
         outputs = K.conv1d(inputs,
                            kernel,
-                           padding='valid')
+                           padding=self.padding)
         return outputs
 
     def get_config(self):
@@ -325,8 +354,27 @@ class IrrepToIrrepConv(Layer):
         base_config = super(IrrepToIrrepConv, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
+    def compute_output_shape(self, input_shape):
+        length = input_shape[1]
+        if self.padding == 'valid':
+            return None, length - self.kernel_size + 1, self.filters
+        if self.padding == 'same':
+            return None, length, self.filters
 
-class EquiNet(Layer):
+
+class ConcatLayer(Layer):
+    """
+    Mapping from one irrep layer to another
+    """
+
+    def __init__(self):
+        super(ConcatLayer, self).__init__()
+
+    def call(self, inputs):
+        return inputs + inputs[:, ::-1, :]
+
+
+class EquiNet():
 
     def __init__(self, filters=[(2, 2), (2, 2), (2, 2), (1, 0)], kernel_sizes=[5, 5, 7, 7], out_size=1):
         """
@@ -334,9 +382,9 @@ class EquiNet(Layer):
         Then goes from one setting to another.
         filters
         """
-        super(EquiNet, self).__init__()
+        # super(EquiNet, self).__init__()
 
-        assert len(filters) == len(kernel_sizes)
+        # assert len(filters) == len(kernel_sizes)
         # self.input_dense = 1000
         successive_shrinking = (i - 1 for i in kernel_sizes)
         self.input_dense = 1000 - sum(successive_shrinking)
@@ -359,6 +407,7 @@ class EquiNet(Layer):
                 kernel_size=kernel_sizes[i],
             ))
 
+        self.flattener = kl.Flatten()
         self.dense = Dense(out_size, input_dim=self.input_dense)
 
     def call(self, inputs):
@@ -386,6 +435,35 @@ class EquiNet(Layer):
         x = self.dense(x)
         return x
 
+    def func_api_model(self):
+        inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+        x = self.reg_irrep(inputs)
+        # rcinputs = inputs[:, ::-1, ::-1]
+        # rcx = self.reg_irrep(rcinputs)
+
+        for irrep_layer in self.irrep_layers:
+            x = irrep_layer(x)
+
+        # Average two strands predictions
+        x = ConcatLayer()(x)
+        # x = x + x[:, ::-1, :]
+
+        # x_shape = x.shape.as_list()
+        # Flatten
+        # bs = x_shape[0] if x_shape[0] is not None else 1
+        # length = x_shape[1]
+        # x = tf.reshape(x, (bs, -1))
+        # length = tf.shape(x)[1].numpy().item()
+        # assert length == self.input_dense
+        # print(x_shape)
+
+        print(x.shape)
+        x = self.flattener(x)
+        print(x.shape)
+        outputs = self.dense(x)
+        model = keras.Model(inputs, outputs)
+        return model
+
 
 def training_step(model, input, target):
     with tf.GradientTape() as tape:
@@ -401,19 +479,33 @@ if __name__ == '__main__':
     import tensorflow as tf
     from keras.utils import Sequence
 
-    tf.enable_eager_execution()
 
+    # tf.enable_eager_execution()
 
-    # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-    # outputs = EquiNet(inputs)
-    # model = keras.Model(inputs, outputs)
-    # model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
+    class Generator(Sequence):
+        def __init__(self, eager=False, inlen=1000, outlen=1000, infeat=4, outfeat=1, bs=1, binary=False):
+            self.eager = eager
+            self.inlen = inlen
+            self.outlen = outlen
+            self.infeat = infeat
+            self.outfeat = outfeat
+            self.bs = bs
+            self.binary = binary
 
-    class gen(Sequence):
         def __getitem__(self, item):
-            input = tf.random.uniform((1, 1000, 4))
-            target = tf.random.uniform((1, 1000, 3))
-            return input, target
+            if self.eager:
+                inputs = tf.random.uniform((self.bs, self.inlen, self.infeat))
+                if self.binary:
+                    targets = tf.random.uniform(1)
+                else:
+                    targets = tf.random.uniform((self.bs, self.outlen, self.outfeat))
+            else:
+                inputs = np.random.uniform(size=(self.bs, self.inlen, self.infeat))
+                if self.binary:
+                    targets = np.random.uniform(size=(self.bs, 1))
+                else:
+                    targets = np.random.uniform(size=(self.bs, self.outlen, self.outfeat))
+            return inputs, targets
 
         def __len__(self):
             return 10
@@ -423,10 +515,18 @@ if __name__ == '__main__':
                 yield item
 
 
-    a_1 = 1
+    # Now create the layers objects
+
+    a_1 = 2
     b_1 = 1
-    a_2 = 1
+    a_2 = 2
     b_2 = 1
+
+    # generator = Generator(outfeat=4, outlen=1000)
+    generator = Generator(binary=True)
+    # inputs, targets = generator[2]
+    # print(inputs.shape)
+    # print(targets.shape)
 
     reg_reg = RegToRegConv(reg_in=2,
                            reg_out=3,
@@ -441,31 +541,48 @@ if __name__ == '__main__':
                                    b_in=b_1,
                                    a_out=a_2,
                                    b_out=b_2,
-                                   kernel_size=15)
+                                   kernel_size=5, padding='same')
 
-    whole = EquiNet()
-
-    loss_fn = tf.keras.losses.MeanSquaredError()
-    optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+    # Now use these layers to build models : either use directly in eager mode or use the functional API for Keras use
 
     # model = reg_irrep
     # model = irrep_irrep
     # model = reg_reg
-    model = whole
-    from keras_genomics.layers import RevCompConv1D
+    # model = EquiNet()
+
+    # Keras Style
+    # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+    # outputs = inputs
+    # outputs = reg_irrep(inputs)
+    # for i in range(3):
+    #     outputs=irrep_irrep(outputs)
+    # print(outputs.shape)
+    # model = keras.Model(inputs, outputs)
+    # model.summary()
+    model = EquiNet().func_api_model()
+    model.summary()
+    model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
+    model.fit_generator(generator)
+
+    # from keras_genomics.layers import RevCompConv1D
+    # model = whole.func_api_model()
+    # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+    #               loss="binary_crossentropy",
+    #               metrics=["accuracy"])
 
     # model = RevCompConv1D(3,10)
 
     # x = tf.random.uniform((1, 1000, 4))
     # x2 = x[:, ::-1, ::-1]
     # out1 = reg_irrep(x)
+    # print(out1.shape)
     # out1 = irrep_irrep(out1)
     # out2 = reg_irrep(x2)
     # out2 = irrep_irrep(out2)
     # print(out1[0, :5, :].numpy())
     # print('reversed')
     # print(out2[0, -5:, :].numpy()[::-1])
-
+    #
     # x = tf.random.uniform((1, 1000, 4))
     # x2 = x[:, ::-1, ::-1]
     # out1 = model(x)
@@ -479,13 +596,15 @@ if __name__ == '__main__':
 
     sys.exit()
 
-    gen = gen()
-    # input, target = gen.__getitem__(1)
+    loss_fn = tf.keras.losses.MeanSquaredError()
+    optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+
+    # input, target = generator.__getitem__(1)
     # for i in range(10):
     #     training_step(model, input, target)
     #
     # gen = iter([i for i in range(10)])
-    cal = lambda: gen
+    cal = lambda: generator
     train_dataset = tf.data.Dataset.from_generator(cal, (tf.float32, tf.float32))
     for batch in train_dataset:
         print(type(batch[0]))
