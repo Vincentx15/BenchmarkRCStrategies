@@ -362,6 +362,29 @@ class IrrepToIrrepConv(Layer):
             return None, length, self.filters
 
 
+class ActivationLayer(Layer):
+    """
+    Mapping from one irrep layer to another
+    """
+
+    def __init__(self, a, b):
+        super(ActivationLayer, self).__init__()
+        self.a = a
+        self.b = b
+
+    def call(self, inputs):
+        a_outputs = None
+        if self.a > 0:
+            a_inputs = inputs[:, :, :self.a]
+            a_outputs = kl.ReLU()(a_inputs)
+        if self.b > 0:
+            b_inputs = inputs[:, :, self.a:]
+            b_outputs = tf.tanh(b_inputs)
+            if a_outputs is not None:
+                return K.concatenate((a_outputs, b_outputs), axis=-1)
+        return a_outputs
+
+
 class ConcatLayer(Layer):
     """
     Mapping from one irrep layer to another
@@ -479,8 +502,10 @@ if __name__ == '__main__':
     import tensorflow as tf
     from keras.utils import Sequence
 
+    eager = True
+    if eager:
+        tf.enable_eager_execution()
 
-    # tf.enable_eager_execution()
 
     class Generator(Sequence):
         def __init__(self, eager=False, inlen=1000, outlen=1000, infeat=4, outfeat=1, bs=1, binary=False):
@@ -522,8 +547,8 @@ if __name__ == '__main__':
     a_2 = 2
     b_2 = 1
 
-    # generator = Generator(outfeat=4, outlen=1000)
-    generator = Generator(binary=True)
+    generator = Generator(outfeat=3, outlen=993, eager=eager)
+    # generator = Generator(binary=True)
     # inputs, targets = generator[2]
     # print(inputs.shape)
     # print(targets.shape)
@@ -552,17 +577,13 @@ if __name__ == '__main__':
 
     # Keras Style
     # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-    # outputs = inputs
     # outputs = reg_irrep(inputs)
-    # for i in range(3):
-    #     outputs=irrep_irrep(outputs)
-    # print(outputs.shape)
+    # outputs = ActivationLayer(a_1, b_1)(outputs)
     # model = keras.Model(inputs, outputs)
     # model.summary()
-    model = EquiNet().func_api_model()
-    model.summary()
-    model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
-    model.fit_generator(generator)
+    # model.summary()
+    # model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
+    # model.fit_generator(generator)
 
     # from keras_genomics.layers import RevCompConv1D
     # model = whole.func_api_model()
@@ -572,16 +593,20 @@ if __name__ == '__main__':
 
     # model = RevCompConv1D(3,10)
 
-    # x = tf.random.uniform((1, 1000, 4))
-    # x2 = x[:, ::-1, ::-1]
-    # out1 = reg_irrep(x)
+    x = tf.random.uniform((1, 1000, 4))
+    x2 = x[:, ::-1, ::-1]
+    out1 = reg_irrep(x)
     # print(out1.shape)
     # out1 = irrep_irrep(out1)
-    # out2 = reg_irrep(x2)
+    out2 = reg_irrep(x2)
     # out2 = irrep_irrep(out2)
     # print(out1[0, :5, :].numpy())
-    # print('reversed')
-    # print(out2[0, -5:, :].numpy()[::-1])
+    out1 = ActivationLayer(a_1, b_1)(out1)
+    out2 = ActivationLayer(a_1, b_1)(out2)
+
+    print(out1[0, :5, :].numpy())
+    print('reversed')
+    print(out2[0, -5:, :].numpy()[::-1])
     #
     # x = tf.random.uniform((1, 1000, 4))
     # x2 = x[:, ::-1, ::-1]
