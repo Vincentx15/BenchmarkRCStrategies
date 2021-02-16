@@ -36,7 +36,6 @@ class RegToRegConv(Layer):
                                            name='left_kernel')
 
         # odd size : To get the equality for x=0, we need to have transposed columns + flipped bor the b_out dims
-        # TODO : fixme ?
         if self.kernel_size % 2 == 1:
             self.half_center = self.add_weight(shape=(1, 2 * self.reg_in, 2 * self.reg_out),
                                                initializer=self.kernel_initializer,
@@ -50,7 +49,6 @@ class RegToRegConv(Layer):
 
         # Extra steps are needed for building the middle part when using the odd size
         # We build the missing parts by transposing everything.
-        # TODO : fixme
         if self.kernel_size % 2 == 1:
             other_half = self.half_center[:, ::-1, ::-1]
             center_kernel = (other_half + self.half_center) / 2
@@ -64,9 +62,8 @@ class RegToRegConv(Layer):
 
     def get_config(self):
         config = {'reg_in': self.reg_in,
-                  'a_out': self.a_out,
-                  'b_out': self.b_out}
-        base_config = super(RegToIrrepConv, self).get_config()
+                  'reg_out': self.reg_out}
+        base_config = super(RegToRegConv, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
     def compute_output_shape(self, input_shape):
@@ -365,7 +362,7 @@ class IrrepToIrrepConv(Layer):
 
 class ActivationLayer(Layer):
     """
-    Mapping from one irrep layer to another
+    Activation layer for a_n, b_n layers
     """
 
     def __init__(self, a, b):
@@ -388,9 +385,87 @@ class ActivationLayer(Layer):
         return a_outputs
 
 
+class IrrepBatchNorm(Layer):
+    """
+    Activation layer for a_n, b_n layers
+    """
+
+    def __init__(self, a, b):
+        super(IrrepBatchNorm, self).__init__()
+        self.a = a
+        self.b = b
+        self.passed = tf.Variable(initial_value=tf.constant(0, dtype=tf.float32), dtype=tf.float32, trainable=False)
+        if a > 0:
+            self.mu_a = self.add_weight(shape=([a]),
+                                        initializer="zeros",
+                                        name='mu_a')
+            self.sigma_a = self.add_weight(shape=([a]),
+                                           initializer="ones",
+                                           name='sigma_a')
+            self.running_mu_a = tf.Variable(initial_value=tf.zeros([a]), trainable=False)
+            self.running_sigma_a = tf.Variable(initial_value=tf.ones([a]), trainable=False)
+
+        if b > 0:
+            self.sigma_b = self.add_weight(shape=([b]),
+                                           initializer="ones",
+                                           name='sigma_a')
+            self.running_sigma_b = tf.Variable(initial_value=tf.ones([b]), trainable=False)
+
+    def call(self, inputs, training=None):
+        a = tf.shape(inputs)
+        batch_size = a[0]
+        length = a[1]
+        division_over = batch_size * length
+        division_over = tf.cast(division_over, tf.float32)
+        if training:
+            a_outputs = None
+            if self.a > 0:
+                a_inputs = inputs[:, :, :self.a]
+                mu_a_batch = tf.reduce_mean(a_inputs, axis=(0, 1))
+                sigma_a_batch = tf.math.reduce_std(a_inputs, axis=(0, 1)) + 0.01
+                a_outputs = (a_inputs - mu_a_batch) / sigma_a_batch * self.sigma_a + self.mu_a
+
+                self.running_mu_a = (self.running_mu_a * self.passed + division_over * mu_a_batch) / (
+                        self.passed + division_over)
+                self.running_sigma_a = (self.running_sigma_a * self.passed + division_over * sigma_a_batch) / (
+                        self.passed + division_over)
+
+            # For b_dims, we compute some kind of averaged over group action mean/std
+            if self.b > 0:
+                b_inputs = inputs[:, :, self.a:]
+                numerator = tf.math.sqrt(tf.math.reduce_sum(tf.math.square(b_inputs), axis=(0, 1)))
+                sigma_b_batch = numerator / tf.math.sqrt(division_over) + 0.01
+                b_outputs = b_inputs / sigma_b_batch * self.sigma_b
+
+                self.running_sigma_b = (self.running_sigma_b * self.passed + division_over * sigma_b_batch) / (
+                        self.passed + division_over)
+                self.passed = self.passed + division_over
+                if a_outputs is not None:
+                    return K.concatenate((a_outputs, b_outputs), axis=-1)
+                else:
+                    return b_outputs
+            self.passed = self.passed + division_over
+            return a_outputs
+        else:
+            a_outputs = None
+            if self.a > 0:
+                a_inputs = inputs[:, :, :self.a]
+                a_outputs = (a_inputs - self.running_mu_a) / self.running_sigma_a * self.sigma_a + self.mu_a
+
+            # For b_dims, we compute some kind of averaged over group action mean/std
+            if self.b > 0:
+                b_inputs = inputs[:, :, self.a:]
+                b_outputs = b_inputs / self.running_sigma_b * self.sigma_b
+                if a_outputs is not None:
+                    return K.concatenate((a_outputs, b_outputs), axis=-1)
+                else:
+                    return b_outputs
+            return a_outputs
+
+
 class ConcatLayer(Layer):
     """
-    Create an invariant mapping that pools the negative dimensions
+    Concatenation layer to average both strands outputs
     """
 
     def __init__(self, a, b):
@@ -428,14 +503,16 @@ class EquiNet():
 
         first_kernel_size = kernel_sizes[0]
         first_a, first_b = filters[0]
+        self.last_a, self.last_b = filters[-1]
         self.reg_irrep = RegToIrrepConv(reg_in=2,
                                         a_out=first_a,
                                         b_out=first_b,
                                         kernel_size=first_kernel_size)
-        self.irrep_layers = []
-        self.activation_layers = []
-        self.last_a, self.last_b = filters[-1]
+        self.first_bn = IrrepBatchNorm(a=first_a, b=first_b)
 
+        self.irrep_layers = []
+        self.bn_layers = []
+        self.activation_layers = []
         for i in range(1, len(filters)):
             prev_a, prev_b = filters[i - 1]
             next_a, next_b = filters[i]
@@ -446,10 +523,8 @@ class EquiNet():
                 b_out=next_b,
                 kernel_size=kernel_sizes[i],
             ))
-            self.activation_layers.append(ActivationLayer(
-                a=next_a,
-                b=next_b,
-            ))
+            self.bn_layers.append(IrrepBatchNorm(a=next_a, b=next_b))
+            self.activation_layers.append(ActivationLayer(a=next_a, b=next_b))
 
         self.flattener = kl.Flatten()
         self.dense = kl.Dense(out_size, input_dim=self.input_dense, activation='sigmoid')
@@ -457,30 +532,63 @@ class EquiNet():
     def func_api_model(self):
         inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
         x = self.reg_irrep(inputs)
-        # rcinputs = inputs[:, ::-1, ::-1]
-        # rcx = self.reg_irrep(rcinputs)
+        x = self.first_bn(x)
 
-        for irrep_layer, activation_layer in zip(self.irrep_layers, self.activation_layers):
+        for irrep_layer, bn_layer, activation_layer in zip(self.irrep_layers, self.bn_layers, self.activation_layers):
             x = irrep_layer(x)
+            x = bn_layer(x)
             x = activation_layer(x)
 
         # Average two strands predictions
         x = ConcatLayer(a=self.last_a, b=self.last_b)(x)
-        # x = x + x[:, ::-1, :]
-
-        # x_shape = x.shape.as_list()
-        # Flatten
-        # bs = x_shape[0] if x_shape[0] is not None else 1
-        # length = x_shape[1]
-        # x = tf.reshape(x, (bs, -1))
-        # length = tf.shape(x)[1].numpy().item()
-        # assert length == self.input_dense
-        # print(x_shape)
-
         x = self.flattener(x)
         outputs = self.dense(x)
         model = keras.Model(inputs, outputs)
         return model
+
+    def eager_call(self, inputs):
+        rcinputs = inputs[:, ::-1, ::-1]
+
+        print(inputs.numpy()[0, :5, :])
+        print('reversed')
+        print(rcinputs[:, ::-1, :].numpy()[0, :5, :])
+        print()
+
+        x = self.reg_irrep(inputs)
+        rcx = self.reg_irrep(rcinputs)
+
+        print(x.numpy()[0, :5, :])
+        print('reversed')
+        print(rcx[:, ::-1, :].numpy()[0, :5, :])
+        print()
+
+        x = self.first_bn(x)
+        rcx = self.first_bn(rcx)
+
+        print(x.numpy()[0, :5, :])
+        print('reversed')
+        print(rcx[:, ::-1, :].numpy()[0, :5, :])
+        print()
+
+        for irrep_layer, bn_layer, activation_layer in zip(self.irrep_layers, self.bn_layers, self.activation_layers):
+            x = irrep_layer(x)
+            x = bn_layer(x)
+            x = activation_layer(x)
+
+            rcx = irrep_layer(rcx)
+            rcx = bn_layer(rcx)
+            rcx = activation_layer(rcx)
+
+            print(x.numpy()[0, :5, :])
+            print('reversed')
+            print(rcx[:, ::-1, :].numpy()[0, :5, :])
+            print()
+
+        # Average two strands predictions
+        x = ConcatLayer(a=self.last_a, b=self.last_b)(x)
+        x = self.flattener(x)
+        outputs = self.dense(x)
+        return outputs
 
 
 if __name__ == '__main__':
@@ -488,7 +596,7 @@ if __name__ == '__main__':
     import tensorflow as tf
     from keras.utils import Sequence
 
-    eager = False
+    eager = True
     if eager:
         tf.enable_eager_execution()
 
@@ -529,7 +637,7 @@ if __name__ == '__main__':
     # Now create the layers objects
 
     a_1 = 2
-    b_1 = 1
+    b_1 = 2
     a_2 = 2
     b_2 = 1
 
@@ -540,7 +648,7 @@ if __name__ == '__main__':
     # print(targets.shape)
 
     reg_reg = RegToRegConv(reg_in=2,
-                           reg_out=3,
+                           reg_out=2,
                            kernel_size=7)
 
     reg_irrep = RegToIrrepConv(reg_in=2,
@@ -552,7 +660,9 @@ if __name__ == '__main__':
                                    b_in=b_1,
                                    a_out=a_2,
                                    b_out=b_2,
-                                   kernel_size=5, padding='same')
+                                   kernel_size=5)
+    bn_irrep = IrrepBatchNorm(a=a_1,
+                              b=b_1)
 
     # Now use these layers to build models : either use directly in eager mode or use the functional API for Keras use
 
@@ -564,14 +674,14 @@ if __name__ == '__main__':
     # Keras Style
     # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
     # outputs = reg_irrep(inputs)
+    # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
     # outputs = ActivationLayer(a_1, b_1)(outputs)
     # model = keras.Model(inputs, outputs)
     # model.summary()
+    # model = EquiNet().func_api_model()
     # model.summary()
     # model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
     # model.fit_generator(generator)
-
-    model = EquiNet().func_api_model()
 
     # from keras_genomics.layers import RevCompConv1D
     # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
@@ -584,14 +694,16 @@ if __name__ == '__main__':
     # outputs = ActivationLayer(a_1, b_1)(outputs)
     # model = keras.Model(inputs, outputs)
 
-    # x = tf.random.uniform((1, 1000, 4))
-    # print(x[0, :5, :].numpy())
+    # x = tf.random.uniform((2, 1000, 4))
     # x2 = x[:, ::-1, ::-1]
+    # model = EquiNet().eager_call(x)
+    # x = reg_irrep(x)
+    # x = bn_irrep(x)
+    # x = tf.math.reduce_mean(x, axis=(1,2))
     # out1 = reg_irrep(x)
-    # print(out1.shape)
-    # out1 = irrep_irrep(out1)
+    # out1 = bn_irrep(out1)
     # out2 = reg_irrep(x2)
-    # out2 = irrep_irrep(out2)
+    # out2 = bn_irrep(out2)
     # print(out1[0, :5, :].numpy())
     # out1 = ActivationLayer(a_1, b_1)(out1)
     # out2 = ActivationLayer(a_1, b_1)(out2)
