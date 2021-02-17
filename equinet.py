@@ -393,10 +393,12 @@ class IrrepBatchNorm(Layer):
     Activation layer for a_n, b_n layers
     """
 
-    def __init__(self, a, b):
+    def __init__(self, a, b, placeholder=False):
         super(IrrepBatchNorm, self).__init__()
         self.a = a
         self.b = b
+        self.placeholder=placeholder
+
         self.passed = tf.Variable(initial_value=tf.constant(0, dtype=tf.float32), dtype=tf.float32, trainable=False)
         if a > 0:
             self.mu_a = self.add_weight(shape=([a]),
@@ -415,6 +417,8 @@ class IrrepBatchNorm(Layer):
             self.running_sigma_b = tf.Variable(initial_value=tf.ones([b]), trainable=False)
 
     def call(self, inputs, training=None):
+        if self.placeholder:
+            return inputs
         a = tf.shape(inputs)
         batch_size = a[0]
         length = a[1]
@@ -496,7 +500,8 @@ class EquiNet():
                  kernel_sizes=[5, 5, 7, 7],
                  pool_size=40,
                  pool_length=20,
-                 out_size=1):
+                 out_size=1,
+                 no_bn=False):
         """
         First map the regular representation to irrep setting
         Then goes from one setting to another.
@@ -515,7 +520,7 @@ class EquiNet():
                                         a_out=first_a,
                                         b_out=first_b,
                                         kernel_size=first_kernel_size)
-        self.first_bn = IrrepBatchNorm(a=first_a, b=first_b)
+        self.first_bn = IrrepBatchNorm(a=first_a, b=first_b, placeholder=no_bn)
         self.first_act = ActivationLayer(a=first_a, b=first_b)
 
         # Now add the intermediate layer : sequence of conv, BN, activation
@@ -532,7 +537,7 @@ class EquiNet():
                 b_out=next_b,
                 kernel_size=kernel_sizes[i],
             ))
-            self.bn_layers.append(IrrepBatchNorm(a=next_a, b=next_b))
+            self.bn_layers.append(IrrepBatchNorm(a=next_a, b=next_b, placeholder=no_bn))
             # Don't add activation if it's the last layer
             placeholder = (i == len(filters) - 1)
             self.activation_layers.append(ActivationLayer(a=next_a,
