@@ -365,12 +365,15 @@ class ActivationLayer(Layer):
     Activation layer for a_n, b_n layers
     """
 
-    def __init__(self, a, b):
+    def __init__(self, a, b, placeholder=False):
         super(ActivationLayer, self).__init__()
         self.a = a
         self.b = b
+        self.placeholder = placeholder
 
     def call(self, inputs):
+        if self.placeholder:
+            return inputs
         a_outputs = None
         if self.a > 0:
             a_inputs = inputs[:, :, :self.a]
@@ -476,7 +479,7 @@ class ConcatLayer(Layer):
     def call(self, inputs):
         a_outputs = None
         if self.a > 0:
-            a_outputs = inputs[:, :, :self.a]
+            a_outputs = (inputs[:, :, :self.a] + inputs[:, ::-1, :self.a]) / 2
         if self.b > 0:
             b_outputs = (inputs[:, :, self.a:] + inputs[:, ::-1, self.a:]) / 2
             if a_outputs is not None:
@@ -488,19 +491,23 @@ class ConcatLayer(Layer):
 
 class EquiNet():
 
-    def __init__(self, filters=[(2, 2), (2, 2), (2, 2), (1, 0)], kernel_sizes=[5, 5, 7, 7], out_size=1):
+    def __init__(self,
+                 filters=[(2, 2), (2, 2), (2, 2), (1, 0)],
+                 kernel_sizes=[5, 5, 7, 7],
+                 pool_size=40,
+                 pool_length=20,
+                 out_size=1):
         """
         First map the regular representation to irrep setting
         Then goes from one setting to another.
-        filters
         """
-        # super(EquiNet, self).__init__()
 
         # assert len(filters) == len(kernel_sizes)
         # self.input_dense = 1000
-        successive_shrinking = (i - 1 for i in kernel_sizes)
-        self.input_dense = 1000 - sum(successive_shrinking)
+        # successive_shrinking = (i - 1 for i in kernel_sizes)
+        # self.input_dense = 1000 - sum(successive_shrinking)
 
+        # First mapping goes from the input to an irrep feature space
         first_kernel_size = kernel_sizes[0]
         first_a, first_b = filters[0]
         self.last_a, self.last_b = filters[-1]
@@ -509,7 +516,9 @@ class EquiNet():
                                         b_out=first_b,
                                         kernel_size=first_kernel_size)
         self.first_bn = IrrepBatchNorm(a=first_a, b=first_b)
+        self.first_act = ActivationLayer(a=first_a, b=first_b)
 
+        # Now add the intermediate layer : sequence of conv, BN, activation
         self.irrep_layers = []
         self.bn_layers = []
         self.activation_layers = []
@@ -524,23 +533,30 @@ class EquiNet():
                 kernel_size=kernel_sizes[i],
             ))
             self.bn_layers.append(IrrepBatchNorm(a=next_a, b=next_b))
-            self.activation_layers.append(ActivationLayer(a=next_a, b=next_b))
+            # Don't add activation if it's the last layer
+            placeholder = (i == len(filters) - 1)
+            self.activation_layers.append(ActivationLayer(a=next_a,
+                                                          b=next_b,
+                                                          placeholder=placeholder))
 
+        self.pool = kl.MaxPooling1D(pool_length=pool_size, strides=pool_length)
         self.flattener = kl.Flatten()
-        self.dense = kl.Dense(out_size, input_dim=self.input_dense, activation='sigmoid')
+        self.dense = kl.Dense(out_size, activation='sigmoid')
 
     def func_api_model(self):
         inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
         x = self.reg_irrep(inputs)
         x = self.first_bn(x)
+        x = self.first_act(x)
 
         for irrep_layer, bn_layer, activation_layer in zip(self.irrep_layers, self.bn_layers, self.activation_layers):
             x = irrep_layer(x)
             x = bn_layer(x)
             x = activation_layer(x)
 
-        # Average two strands predictions
+        # Average two strands predictions, pool and go through Dense
         x = ConcatLayer(a=self.last_a, b=self.last_b)(x)
+        x = self.pool(x)
         x = self.flattener(x)
         outputs = self.dense(x)
         model = keras.Model(inputs, outputs)
@@ -549,26 +565,18 @@ class EquiNet():
     def eager_call(self, inputs):
         rcinputs = inputs[:, ::-1, ::-1]
 
-        print(inputs.numpy()[0, :5, :])
-        print('reversed')
-        print(rcinputs[:, ::-1, :].numpy()[0, :5, :])
-        print()
-
         x = self.reg_irrep(inputs)
-        rcx = self.reg_irrep(rcinputs)
-
-        print(x.numpy()[0, :5, :])
-        print('reversed')
-        print(rcx[:, ::-1, :].numpy()[0, :5, :])
-        print()
-
         x = self.first_bn(x)
-        rcx = self.first_bn(rcx)
+        x = self.first_act(x)
 
-        print(x.numpy()[0, :5, :])
-        print('reversed')
-        print(rcx[:, ::-1, :].numpy()[0, :5, :])
-        print()
+        rcx = self.reg_irrep(rcinputs)
+        rcx = self.first_bn(rcx)
+        rcx = self.first_act(rcx)
+
+        # print(x.numpy()[0, :5, :])
+        # print('reversed')
+        # print(rcx[:, ::-1, :].numpy()[0, :5, :])
+        # print()
 
         for irrep_layer, bn_layer, activation_layer in zip(self.irrep_layers, self.bn_layers, self.activation_layers):
             x = irrep_layer(x)
@@ -579,15 +587,50 @@ class EquiNet():
             rcx = bn_layer(rcx)
             rcx = activation_layer(rcx)
 
-            print(x.numpy()[0, :5, :])
-            print('reversed')
-            print(rcx[:, ::-1, :].numpy()[0, :5, :])
-            print()
+        # Print the beginning of both strands to see it adds up in concat
+        # print(x.shape)
+        # print(x.numpy()[0, :5, :])
+        # print('end')
+        # print(rcx.numpy()[0, :5, :])
+        # print('reversed')
+        # print(rcx[:, ::-1, :].numpy()[0, :5, :])
+        # print()
 
         # Average two strands predictions
         x = ConcatLayer(a=self.last_a, b=self.last_b)(x)
+        rcx = ConcatLayer(a=self.last_a, b=self.last_b)(rcx)
+
+        # print(x.numpy()[0, :5, :])
+        # print('reversed')
+        # print(rcx.numpy()[0, :5, :])
+        # print()
+
+        x = self.pool(x)
+        rcx = self.pool(rcx)
+
+        # print(x.shape)
+        # print(x.numpy()[0, :5, :])
+        # print('reversed')
+        # print(rcx.numpy()[0, :5, :])
+        # print()
+
         x = self.flattener(x)
+        rcx = self.flattener(rcx)
+
+        # print(x.shape)
+        # print(x.numpy()[0, :5])
+        # print('reversed')
+        # print(rcx.numpy()[0, :5])
+        # print()
+
         outputs = self.dense(x)
+        rcout = self.dense(rcx)
+
+        # print(outputs.shape)
+        # print(outputs.numpy()[0, :5])
+        # print('reversed')
+        # print(rcout.numpy()[0, :5])
+        # print()
         return outputs
 
 
@@ -596,7 +639,7 @@ if __name__ == '__main__':
     import tensorflow as tf
     from keras.utils import Sequence
 
-    eager = True
+    eager = False
     if eager:
         tf.enable_eager_execution()
 
@@ -678,10 +721,10 @@ if __name__ == '__main__':
     # outputs = ActivationLayer(a_1, b_1)(outputs)
     # model = keras.Model(inputs, outputs)
     # model.summary()
-    # model = EquiNet().func_api_model()
-    # model.summary()
-    # model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
-    # model.fit_generator(generator)
+    model = EquiNet().func_api_model()
+    model.summary()
+    model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
+    model.fit_generator(generator)
 
     # from keras_genomics.layers import RevCompConv1D
     # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
