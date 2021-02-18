@@ -397,26 +397,27 @@ class IrrepBatchNorm(Layer):
         super(IrrepBatchNorm, self).__init__()
         self.a = a
         self.b = b
-        self.placeholder=placeholder
+        self.placeholder = placeholder
 
-        self.passed = tf.Variable(initial_value=tf.constant(0, dtype=tf.float32), dtype=tf.float32, trainable=False)
-        if a > 0:
-            self.mu_a = self.add_weight(shape=([a]),
-                                        initializer="zeros",
-                                        name='mu_a')
-            self.sigma_a = self.add_weight(shape=([a]),
-                                           initializer="ones",
-                                           name='sigma_a')
-            self.running_mu_a = tf.Variable(initial_value=tf.zeros([a]), trainable=False)
-            self.running_sigma_a = tf.Variable(initial_value=tf.ones([a]), trainable=False)
+        if not placeholder:
+            self.passed = tf.Variable(initial_value=tf.constant(0, dtype=tf.float32), dtype=tf.float32, trainable=False)
+            if a > 0:
+                self.mu_a = self.add_weight(shape=([a]),
+                                            initializer="zeros",
+                                            name='mu_a')
+                self.sigma_a = self.add_weight(shape=([a]),
+                                               initializer="ones",
+                                               name='sigma_a')
+                self.running_mu_a = tf.Variable(initial_value=tf.zeros([a]), trainable=False)
+                self.running_sigma_a = tf.Variable(initial_value=tf.ones([a]), trainable=False)
 
-        if b > 0:
-            self.sigma_b = self.add_weight(shape=([b]),
-                                           initializer="ones",
-                                           name='sigma_a')
-            self.running_sigma_b = tf.Variable(initial_value=tf.ones([b]), trainable=False)
+            if b > 0:
+                self.sigma_b = self.add_weight(shape=([b]),
+                                               initializer="ones",
+                                               name='sigma_a')
+                self.running_sigma_b = tf.Variable(initial_value=tf.ones([b]), trainable=False)
 
-    def call(self, inputs, training=None):
+    def call(self, inputs, training=True):
         if self.placeholder:
             return inputs
         a = tf.shape(inputs)
@@ -501,7 +502,7 @@ class EquiNet():
                  pool_size=40,
                  pool_length=20,
                  out_size=1,
-                 no_bn=False):
+                 placeholder_bn=False):
         """
         First map the regular representation to irrep setting
         Then goes from one setting to another.
@@ -520,7 +521,7 @@ class EquiNet():
                                         a_out=first_a,
                                         b_out=first_b,
                                         kernel_size=first_kernel_size)
-        self.first_bn = IrrepBatchNorm(a=first_a, b=first_b, placeholder=no_bn)
+        self.first_bn = IrrepBatchNorm(a=first_a, b=first_b, placeholder=placeholder_bn)
         self.first_act = ActivationLayer(a=first_a, b=first_b)
 
         # Now add the intermediate layer : sequence of conv, BN, activation
@@ -537,7 +538,7 @@ class EquiNet():
                 b_out=next_b,
                 kernel_size=kernel_sizes[i],
             ))
-            self.bn_layers.append(IrrepBatchNorm(a=next_a, b=next_b, placeholder=no_bn))
+            self.bn_layers.append(IrrepBatchNorm(a=next_a, b=next_b, placeholder=placeholder_bn))
             # Don't add activation if it's the last layer
             placeholder = (i == len(filters) - 1)
             self.activation_layers.append(ActivationLayer(a=next_a,
@@ -577,6 +578,7 @@ class EquiNet():
         rcx = self.reg_irrep(rcinputs)
         rcx = self.first_bn(rcx)
         rcx = self.first_act(rcx)
+
 
         # print(x.numpy()[0, :5, :])
         # print('reversed')
@@ -647,6 +649,10 @@ if __name__ == '__main__':
     eager = False
     if eager:
         tf.enable_eager_execution()
+
+    curr_seed = 42
+    np.random.seed(curr_seed)
+    tf.set_random_seed(curr_seed)
 
 
     class Generator(Sequence):
@@ -720,51 +726,57 @@ if __name__ == '__main__':
     # model = EquiNet()
 
     # Keras Style
-    # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-    # outputs = reg_irrep(inputs)
-    # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
-    # outputs = ActivationLayer(a_1, b_1)(outputs)
-    # model = keras.Model(inputs, outputs)
-    # model.summary()
-    model = EquiNet().func_api_model()
-    model.summary()
-    model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
-    model.fit_generator(generator)
+    if not eager:
+        # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+        # outputs = reg_irrep(inputs)
+        # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
+        # outputs = ActivationLayer(a_1, b_1)(outputs)
+        # model = keras.Model(inputs, outputs)
+        # model.summary()
+        model = EquiNet(placeholder_bn=True).func_api_model()
+        model.summary()
+        model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
+        model.fit_generator(generator)
 
-    # from keras_genomics.layers import RevCompConv1D
-    # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
-    #               loss="binary_crossentropy",
-    #               metrics=["accuracy"])
+        # from keras_genomics.layers import RevCompConv1D
+        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+        #               loss="binary_crossentropy",
+        #               metrics=["accuracy"])
 
-    # model = RevCompConv1D(3,10)
-    # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-    # outputs = reg_irrep(inputs)
-    # outputs = ActivationLayer(a_1, b_1)(outputs)
-    # model = keras.Model(inputs, outputs)
-
-    # x = tf.random.uniform((2, 1000, 4))
-    # x2 = x[:, ::-1, ::-1]
-    # model = EquiNet().eager_call(x)
-    # x = reg_irrep(x)
-    # x = bn_irrep(x)
-    # x = tf.math.reduce_mean(x, axis=(1,2))
-    # out1 = reg_irrep(x)
-    # out1 = bn_irrep(out1)
-    # out2 = reg_irrep(x2)
-    # out2 = bn_irrep(out2)
-    # print(out1[0, :5, :].numpy())
-    # out1 = ActivationLayer(a_1, b_1)(out1)
-    # out2 = ActivationLayer(a_1, b_1)(out2)
-    #
-    # print(out1[0, :5, :].numpy())
-    # print('reversed')
-    # print(out2[0, -5:, :].numpy()[::-1])
-    # #
-    # x = tf.random.uniform((1, 1000, 4))
-    # x2 = x[:, ::-1, ::-1]
-    # out1 = model(x)
-    # out2 = model(x2)
-    #
-    # print(out1.numpy())
-    # print('reversed')
-    # print(out2.numpy()[::-1])
+        # model = RevCompConv1D(3,10)
+        # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+        # outputs = reg_irrep(inputs)
+        # outputs = ActivationLayer(a_1, b_1)(outputs)
+        # model = keras.Model(inputs, outputs)
+    if eager:
+        x = tf.random.uniform((2, 1000, 4))
+        # x2 = x[:, ::-1, ::-1]
+        print('without BN')
+        out1 = EquiNet(placeholder_bn=True).eager_call(x)
+        print()
+        print('with BN')
+        out2 = EquiNet(placeholder_bn=False).eager_call(x)
+        # print(x)
+        # x = reg_irrep(x)
+        # x = bn_irrep(x)
+        # x = tf.math.reduce_mean(x, axis=(1,2))
+        # out1 = reg_irrep(x)
+        # out1 = bn_irrep(out1)
+        # out2 = reg_irrep(x2)
+        # out2 = bn_irrep(out2)
+        # print(out1[0, :5, :].numpy())
+        # out1 = ActivationLayer(a_1, b_1)(out1)
+        # out2 = ActivationLayer(a_1, b_1)(out2)
+        #
+        # print(out1[0, :5, :].numpy())
+        # print('reversed')
+        # print(out2[0, -5:, :].numpy()[::-1])
+        # #
+        # x = tf.random.uniform((1, 1000, 4))
+        # x2 = x[:, ::-1, ::-1]
+        # out1 = model(x)
+        # out2 = model(x2)
+        #
+        # print(out1.numpy())
+        # print('reversed')
+        # print(out2.numpy()[::-1])

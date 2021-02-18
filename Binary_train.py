@@ -37,6 +37,7 @@ from seqdataloader.batchproducers.coordbased import coordbatchtransformers
 # from seqdataloader.batchproducers.coordbased.coordbatchtransformers import AbstractCoordBatchTransformer
 # from seqdataloader.batchproducers.coordbased.coordbatchtransformers import get_revcomp
 
+from BinaryArchs import get_rc_model, get_reg_model
 import equinet
 
 
@@ -315,31 +316,6 @@ def get_generators(TF, seq_len, is_aug, curr_seed):
         return aug_train_batch_generator
 
 
-def get_reg_model(parameters):
-    model = keras.models.Sequential()
-    model.add(keras.layers.Convolution1D(
-        input_shape=(1000, 4), nb_filter=16, filter_length=15))
-    model.add(keras.layers.normalization.BatchNormalization())
-    model.add(keras.layers.core.Activation("relu"))
-    model.add(keras.layers.convolutional.Convolution1D(
-        nb_filter=16, filter_length=14))
-    model.add(keras.layers.normalization.BatchNormalization())
-    model.add(keras.layers.Activation("relu"))
-    model.add(keras.layers.convolutional.Convolution1D(
-        nb_filter=16, filter_length=14))
-    model.add(keras.layers.normalization.BatchNormalization())
-    model.add(keras.layers.Activation("relu"))
-    model.add(keras.layers.convolutional.MaxPooling1D(pool_length=parameters['pool_size'],
-                                                      strides=parameters['strides']))
-    model.add(Flatten())
-    model.add(keras.layers.core.Dense(output_dim=1, trainable=True,
-                                      init="glorot_uniform"))
-    model.add(keras.layers.core.Activation("sigmoid"))
-    model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
-                  loss="binary_crossentropy", metrics=["accuracy"])
-    return model
-
-
 class AuRocCallback(keras.callbacks.Callback):
     def __init__(self, model, valid_X, valid_Y):
         self.model = model
@@ -479,6 +455,7 @@ if __name__ == '__main__':
                                                     is_aug=False)
 
     # model = get_reg_model(parameters)
+    # model = get_rc_model(parameters)
     model = equinet.EquiNet(filters=[(8, 8), (8, 8), (8, 8)], kernel_sizes=[15, 14, 13])
     model = model.func_api_model()
     model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
