@@ -455,8 +455,8 @@ if __name__ == '__main__':
                                                     is_aug=False)
 
     # model = get_reg_model(parameters)
-    model = get_rc_model(parameters)
-    model = equinet.EquiNet(filters=[(8, 8), (8, 8), (8, 8)], kernel_sizes=[15, 14, 13])
+    # model = get_rc_model(parameters, is_weighted_sum=False)
+    model = equinet.EquiNetBinary(filters=[(8, 8), (8, 8), (8, 8)], kernel_sizes=[15, 14, 14])
     model = model.func_api_model()
     model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
                   loss="binary_crossentropy", metrics=["accuracy"])

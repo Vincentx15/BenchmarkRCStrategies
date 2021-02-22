@@ -570,9 +570,9 @@ class RegConcatLayer(Layer):
         self.reg = reg
 
     def call(self, inputs):
-        print('a', inputs[:, :, :self.reg][0, :5, :])
-        print('b', inputs[:, :, self.reg:][0, :5, :])
-        print('c', inputs[:, :, self.reg:][:, ::-1, ::-1][0, :5, :])
+        # print('a', inputs[:, :, :self.reg][0, :5, :])
+        # print('b', inputs[:, :, self.reg:][0, :5, :])
+        # print('c', inputs[:, :, self.reg:][:, ::-1, ::-1][0, :5, :])
         outputs = (inputs[:, :, :self.reg] + inputs[:, :, self.reg:][:, ::-1, ::-1]) / 2
         return outputs
 
@@ -580,7 +580,7 @@ class RegConcatLayer(Layer):
         return (input_shape[0], input_shape[1], int(input_shape[2] / 2))
 
 
-class EquiNetBinary():
+class EquiNetBinary:
 
     def __init__(self,
                  filters=[(2, 2), (2, 2), (2, 2), (1, 1)],
@@ -681,21 +681,21 @@ class EquiNetBinary():
 
         # Print the beginning of both strands to see it adds up in concat
         # print(x.shape)
-        print(x.numpy()[0, :5, :])
-        print('end')
-        print(rcx.numpy()[0, :5, :])
-        print('reversed')
-        print(rcx[:, ::-1, :].numpy()[0, :5, :])
-        print()
+        # print(x.numpy()[0, :5, :])
+        # print('end')
+        # print(rcx.numpy()[0, :5, :])
+        # print('reversed')
+        # print(rcx[:, ::-1, :].numpy()[0, :5, :])
+        # print()
 
         # Average two strands predictions
         x = IrrepConcatLayer(a=self.last_a, b=self.last_b)(x)
         rcx = IrrepConcatLayer(a=self.last_a, b=self.last_b)(rcx)
 
-        print(x.numpy()[0, :5, :])
-        print('reversed')
-        print(rcx.numpy()[0, :5, :])
-        print()
+        # print(x.numpy()[0, :5, :])
+        # print('reversed')
+        # print(rcx.numpy()[0, :5, :])
+        # print()
 
         x = self.pool(x)
         rcx = self.pool(rcx)
@@ -726,7 +726,7 @@ class EquiNetBinary():
         return outputs
 
 
-class RCNetBinary():
+class RCNetBinary:
 
     def __init__(self,
                  filters=[2, 2, 2],
@@ -815,13 +815,12 @@ class RCNetBinary():
             rcx = activation_layer(rcx)
 
         # Print the beginning of both strands to see it adds up in concat
-        print(x.shape)
-        print(x.numpy()[0, :5, :])
-        print('end')
-        print(rcx.numpy()[0, :5, :])
-        print('reversed')
-        print(rcx[:, ::-1, :].numpy()[0, :5, :])
-        print('==============')
+        # print(x.shape)
+        # print(x.numpy()[0, :5, :])
+        # print('end')
+        # print(rcx.numpy()[0, :5, :])
+        # print('reversed')
+        # print(rcx[:, ::-1, :].numpy()[0, :5, :])
 
         # Average two strands predictions
         x = RegConcatLayer(reg=self.last_reg)(x)
@@ -835,11 +834,11 @@ class RCNetBinary():
         x = self.pool(x)
         rcx = self.pool(rcx)
 
-        print(x.shape)
-        print(x.numpy()[0, :5, :])
-        print('reversed')
-        print(rcx.numpy()[0, :5, :])
-        print()
+        # print(x.shape)
+        # print(x.numpy()[0, :5, :])
+        # print('reversed')
+        # print(rcx.numpy()[0, :5, :])
+        # print()
 
         x = self.flattener(x)
         rcx = self.flattener(rcx)
@@ -946,16 +945,36 @@ if __name__ == '__main__':
 
     # Keras Style
     if not eager:
+        pass
+        # CHECK EQUIVARIANCE of the rcps : to me it should not be equivariant
+        #   because of the maxpooling that is called too soon
+
+        # parameters = {
+        #     'filters': 16,
+        #     'input_length': 1000,
+        #     'pool_size': 40,
+        #     'strides': 20
+        # }
+        # model = BA.get_rc_model(parameters=parameters, is_weighted_sum=False)
+        #
+        # x = np.random.uniform(size=(5, 1000, 4))
+        # rcx = x[:, ::-1, ::-1]
+        # out1 = model.predict(x)
+        # print(out1)
+        # out2 = model.predict(rcx)
+        # print(out2)
+
+
         # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
         # outputs = reg_irrep(inputs)
         # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
         # outputs = ActivationLayer(a_1, b_1)(outputs)
         # model = keras.Model(inputs, outputs)
         # model.summary()
-        model = EquiNetBinary(placeholder_bn=True).func_api_model()
-        model.summary()
-        model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
-        model.fit_generator(generator)
+        # model = EquiNetBinary(placeholder_bn=True).func_api_model()
+        # model.summary()
+        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
+        # model.fit_generator(generator)
 
         # from keras_genomics.layers import RevCompConv1D
         # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
@@ -970,9 +989,9 @@ if __name__ == '__main__':
     if eager:
         x = tf.random.uniform((2, 1000, 4))
         # x2 = x[:, ::-1, ::-1]
-        print('without BN')
+        # print('without BN')
         # out1 = RCNetBinary(placeholder_bn=True).eager_call(x)
-        out1 = EquiNetBinary(placeholder_bn=True).eager_call(x)
+        # out1 = EquiNetBinary(placeholder_bn=True).eager_call(x)
         # print()
         # print('with BN')
         # out2 = RCNetBinary(placeholder_bn=False).eager_call(x)
