@@ -70,7 +70,10 @@ def run_model(model, model_arch, PARAMETERS):
     model.fit_generator(train_batch_generator,
                         epochs=200,
                         validation_data=val_batch_generator,
-                        callbacks=[early_stopping_callback, model_history])
+                        callbacks=[early_stopping_callback, model_history],
+                        workers=os.cpu_count(),
+                        use_multiprocessing=True
+                        )
     model.set_weights(early_stopping_callback.best_weights)
     save_all(PARAMETERS, model, model_arch, model_history)
 

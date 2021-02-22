@@ -455,7 +455,7 @@ if __name__ == '__main__':
                                                     is_aug=False)
 
     # model = get_reg_model(parameters)
-    # model = get_rc_model(parameters)
+    model = get_rc_model(parameters)
     model = equinet.EquiNet(filters=[(8, 8), (8, 8), (8, 8)], kernel_sizes=[15, 14, 13])
     model = model.func_api_model()
     model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
@@ -475,12 +475,13 @@ if __name__ == '__main__':
                                                  upsampling=True)
 
     model.set_weights(auroc_callback.best_weights)
-    print("Validation set AUROC with best-loss early stopping:",
-          roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
-    print("Test set AUROC with best-loss early stopping:",
-          roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))
+    a = roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X))
+    b = roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X))
     model.set_weights(auroc_callback.best_weights)
-    print("Validation AUROC at best-auroc early stopping:",
-          roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X)))
-    print("Test set AUROC at best-auroc early stopping:",
-          roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X)))
+    c = roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X))
+    d = roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X))
+    print(a, b, c, d)
+    print("Validation set AUROC with best-loss early stopping:", a)
+    print("Test set AUROC with best-loss early stopping:", b)
+    print("Validation AUROC at best-auroc early stopping:", c)
+    print("Test set AUROC at best-auroc early stopping:", d)

@@ -360,13 +360,13 @@ class IrrepToIrrepConv(Layer):
             return None, length, self.filters
 
 
-class ActivationLayer(Layer):
+class IrrepActivationLayer(Layer):
     """
-    Activation layer for a_n, b_n layers
+    BN layer for a_n, b_n feature map
     """
 
     def __init__(self, a, b, placeholder=False):
-        super(ActivationLayer, self).__init__()
+        super(IrrepActivationLayer, self).__init__()
         self.a = a
         self.b = b
         self.placeholder = placeholder
@@ -388,9 +388,75 @@ class ActivationLayer(Layer):
         return a_outputs
 
 
+class RegBatchNorm(Layer):
+    """
+    BN layer for regular layers
+    """
+
+    def __init__(self, reg_dim, placeholder=False):
+        super(RegBatchNorm, self).__init__()
+        self.reg_dim = reg_dim
+        self.placeholder = placeholder
+
+        if not placeholder:
+            self.passed = tf.Variable(initial_value=tf.constant(0, dtype=tf.float32), dtype=tf.float32, trainable=False)
+            self.mu = self.add_weight(shape=([reg_dim]),
+                                      initializer="zeros",
+                                      name='mu')
+            self.sigma = self.add_weight(shape=([reg_dim]),
+                                         initializer="ones",
+                                         name='sigma')
+            self.running_mu = tf.Variable(initial_value=tf.zeros([reg_dim]), trainable=False)
+            self.running_sigma = tf.Variable(initial_value=tf.ones([reg_dim]), trainable=False)
+
+    def call(self, inputs, training=True):
+        if self.placeholder:
+            return inputs
+        a = tf.shape(inputs)
+        batch_size = a[0]
+        length = a[1]
+        division_over = batch_size * length
+        division_over = tf.cast(division_over, tf.float32)
+        if training:
+            modified_inputs = K.concatenate(
+                tensors=[inputs[:, :, :self.reg_dim],
+                         inputs[:, :, self.reg_dim:][:, :, ::-1]],
+                axis=1)
+            mu_batch = tf.reduce_mean(modified_inputs, axis=(0, 1))
+            sigma_batch = tf.math.reduce_std(modified_inputs, axis=(0, 1)) + 0.01
+            normed_inputs = (modified_inputs - mu_batch) / sigma_batch * self.sigma + self.mu
+
+            self.running_mu = (self.running_mu * self.passed + division_over * mu_batch) / (
+                    self.passed + division_over)
+            self.running_sigma = (self.running_sigma * self.passed + division_over * sigma_batch) / (
+                    self.passed + division_over)
+            true_normed_inputs = K.concatenate(
+                tensors=[normed_inputs[:, :length, :],
+                         normed_inputs[:, length:, :][:, :, ::-1]],
+                axis=2)
+            return true_normed_inputs
+
+        else:
+            modified_inputs = K.concatenate(
+                tensors=[inputs[:, :, :self.reg_dim],
+                         inputs[:, :, self.reg_dim:][:, :, ::-1]],
+                axis=1)
+
+            normed_inputs = (modified_inputs - self.running_mu) / self.running_sigma * self.sigma + self.mu
+
+            true_normed_inputs = K.concatenate(
+                tensors=[normed_inputs[:, :length, :],
+                         normed_inputs[:, length:, :][:, :, ::-1]],
+                axis=2)
+            return true_normed_inputs
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0], input_shape[1], input_shape[2])
+
+
 class IrrepBatchNorm(Layer):
     """
-    Activation layer for a_n, b_n layers
+    BN layer for a_n, b_n feature map
     """
 
     def __init__(self, a, b, placeholder=False):
@@ -471,13 +537,13 @@ class IrrepBatchNorm(Layer):
             return a_outputs
 
 
-class ConcatLayer(Layer):
+class IrrepConcatLayer(Layer):
     """
     Concatenation layer to average both strands outputs
     """
 
     def __init__(self, a, b):
-        super(ConcatLayer, self).__init__()
+        super(IrrepConcatLayer, self).__init__()
         self.a = a
         self.b = b
 
@@ -486,7 +552,7 @@ class ConcatLayer(Layer):
         if self.a > 0:
             a_outputs = (inputs[:, :, :self.a] + inputs[:, ::-1, :self.a]) / 2
         if self.b > 0:
-            b_outputs = (inputs[:, :, self.a:] + inputs[:, ::-1, self.a:]) / 2
+            b_outputs = (inputs[:, :, self.a:] - inputs[:, ::-1, self.a:]) / 2
             if a_outputs is not None:
                 return K.concatenate((a_outputs, b_outputs), axis=-1)
             else:
@@ -494,10 +560,30 @@ class ConcatLayer(Layer):
         return a_outputs
 
 
-class EquiNet():
+class RegConcatLayer(Layer):
+    """
+    Concatenation layer to average both strands outputs
+    """
+
+    def __init__(self, reg):
+        super(RegConcatLayer, self).__init__()
+        self.reg = reg
+
+    def call(self, inputs):
+        print('a', inputs[:, :, :self.reg][0, :5, :])
+        print('b', inputs[:, :, self.reg:][0, :5, :])
+        print('c', inputs[:, :, self.reg:][:, ::-1, ::-1][0, :5, :])
+        outputs = (inputs[:, :, :self.reg] + inputs[:, :, self.reg:][:, ::-1, ::-1]) / 2
+        return outputs
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0], input_shape[1], int(input_shape[2] / 2))
+
+
+class EquiNetBinary():
 
     def __init__(self,
-                 filters=[(2, 2), (2, 2), (2, 2), (1, 0)],
+                 filters=[(2, 2), (2, 2), (2, 2), (1, 1)],
                  kernel_sizes=[5, 5, 7, 7],
                  pool_size=40,
                  pool_length=20,
@@ -522,7 +608,7 @@ class EquiNet():
                                         b_out=first_b,
                                         kernel_size=first_kernel_size)
         self.first_bn = IrrepBatchNorm(a=first_a, b=first_b, placeholder=placeholder_bn)
-        self.first_act = ActivationLayer(a=first_a, b=first_b)
+        self.first_act = IrrepActivationLayer(a=first_a, b=first_b)
 
         # Now add the intermediate layer : sequence of conv, BN, activation
         self.irrep_layers = []
@@ -541,9 +627,9 @@ class EquiNet():
             self.bn_layers.append(IrrepBatchNorm(a=next_a, b=next_b, placeholder=placeholder_bn))
             # Don't add activation if it's the last layer
             placeholder = (i == len(filters) - 1)
-            self.activation_layers.append(ActivationLayer(a=next_a,
-                                                          b=next_b,
-                                                          placeholder=placeholder))
+            self.activation_layers.append(IrrepActivationLayer(a=next_a,
+                                                               b=next_b,
+                                                               placeholder=placeholder))
 
         self.pool = kl.MaxPooling1D(pool_length=pool_size, strides=pool_length)
         self.flattener = kl.Flatten()
@@ -561,7 +647,7 @@ class EquiNet():
             x = activation_layer(x)
 
         # Average two strands predictions, pool and go through Dense
-        x = ConcatLayer(a=self.last_a, b=self.last_b)(x)
+        x = IrrepConcatLayer(a=self.last_a, b=self.last_b)(x)
         x = self.pool(x)
         x = self.flattener(x)
         outputs = self.dense(x)
@@ -579,7 +665,6 @@ class EquiNet():
         rcx = self.first_bn(rcx)
         rcx = self.first_act(rcx)
 
-
         # print(x.numpy()[0, :5, :])
         # print('reversed')
         # print(rcx[:, ::-1, :].numpy()[0, :5, :])
@@ -596,21 +681,21 @@ class EquiNet():
 
         # Print the beginning of both strands to see it adds up in concat
         # print(x.shape)
-        # print(x.numpy()[0, :5, :])
-        # print('end')
-        # print(rcx.numpy()[0, :5, :])
-        # print('reversed')
-        # print(rcx[:, ::-1, :].numpy()[0, :5, :])
-        # print()
+        print(x.numpy()[0, :5, :])
+        print('end')
+        print(rcx.numpy()[0, :5, :])
+        print('reversed')
+        print(rcx[:, ::-1, :].numpy()[0, :5, :])
+        print()
 
         # Average two strands predictions
-        x = ConcatLayer(a=self.last_a, b=self.last_b)(x)
-        rcx = ConcatLayer(a=self.last_a, b=self.last_b)(rcx)
+        x = IrrepConcatLayer(a=self.last_a, b=self.last_b)(x)
+        rcx = IrrepConcatLayer(a=self.last_a, b=self.last_b)(rcx)
 
-        # print(x.numpy()[0, :5, :])
-        # print('reversed')
-        # print(rcx.numpy()[0, :5, :])
-        # print()
+        print(x.numpy()[0, :5, :])
+        print('reversed')
+        print(rcx.numpy()[0, :5, :])
+        print()
 
         x = self.pool(x)
         rcx = self.pool(rcx)
@@ -625,6 +710,140 @@ class EquiNet():
         rcx = self.flattener(rcx)
 
         # print(x.shape)
+        # print(x.numpy()[0, :5])
+        # print('reversed')
+        # print(rcx.numpy()[0, :5])
+        # print()
+
+        outputs = self.dense(x)
+        rcout = self.dense(rcx)
+
+        # print(outputs.shape)
+        # print(outputs.numpy()[0, :5])
+        # print('reversed')
+        # print(rcout.numpy()[0, :5])
+        # print()
+        return outputs
+
+
+class RCNetBinary():
+
+    def __init__(self,
+                 filters=[2, 2, 2],
+                 kernel_sizes=[5, 5, 7],
+                 pool_size=40,
+                 pool_length=20,
+                 out_size=1,
+                 placeholder_bn=False):
+        """
+        First map the regular representation to irrep setting
+        Then goes from one setting to another.
+        """
+
+        # First mapping goes from the input to an irrep feature space
+        first_kernel_size = kernel_sizes[0]
+        first_reg = filters[0]
+        self.last_reg = filters[-1]
+
+        self.first_conv = RegToRegConv(reg_in=2,
+                                       reg_out=first_reg,
+                                       kernel_size=first_kernel_size)
+        self.first_bn = RegBatchNorm(reg_dim=first_reg, placeholder=placeholder_bn)
+        self.first_act = kl.core.Activation("relu")
+
+        # Now add the intermediate layer : sequence of conv, BN, activation
+        self.irrep_layers = []
+        self.bn_layers = []
+        self.activation_layers = []
+        for i in range(1, len(filters)):
+            prev = filters[i - 1]
+            next = filters[i]
+            self.irrep_layers.append(RegToRegConv(
+                reg_in=prev,
+                reg_out=next,
+                kernel_size=kernel_sizes[i],
+            ))
+            self.bn_layers.append(RegBatchNorm(reg_dim=next, placeholder=placeholder_bn))
+            self.activation_layers.append(kl.core.Activation("relu"))
+
+        self.pool = kl.MaxPooling1D(pool_length=pool_size, strides=pool_length)
+        self.flattener = kl.Flatten()
+        self.dense = kl.Dense(out_size, activation='sigmoid')
+
+    def func_api_model(self):
+        inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+        x = self.first_conv(inputs)
+        x = self.first_bn(x)
+        x = self.first_act(x)
+
+        for conv_layer, bn_layer, activation_layer in zip(self.irrep_layers, self.bn_layers, self.activation_layers):
+            x = conv_layer(x)
+            x = bn_layer(x)
+            x = activation_layer(x)
+
+        # Average two strands predictions, pool and go through Dense
+        x = RegConcatLayer(reg=self.last_reg)(x)
+        x = self.pool(x)
+        x = self.flattener(x)
+        outputs = self.dense(x)
+        model = keras.Model(inputs, outputs)
+        return model
+
+    def eager_call(self, inputs):
+        rcinputs = inputs[:, ::-1, ::-1]
+
+        x = self.first_conv(inputs)
+        x = self.first_bn(x)
+        x = self.first_act(x)
+
+        rcx = self.first_conv(rcinputs)
+        rcx = self.first_bn(rcx)
+        rcx = self.first_act(rcx)
+
+        # print(x.numpy()[0, :5, :])
+        # print('reversed')
+        # print(rcx[:, ::-1, :].numpy()[0, :5, :])
+        # print()
+
+        for conv_layer, bn_layer, activation_layer in zip(self.irrep_layers, self.bn_layers, self.activation_layers):
+            x = conv_layer(x)
+            x = bn_layer(x)
+            x = activation_layer(x)
+
+            rcx = conv_layer(rcx)
+            rcx = bn_layer(rcx)
+            rcx = activation_layer(rcx)
+
+        # Print the beginning of both strands to see it adds up in concat
+        print(x.shape)
+        print(x.numpy()[0, :5, :])
+        print('end')
+        print(rcx.numpy()[0, :5, :])
+        print('reversed')
+        print(rcx[:, ::-1, :].numpy()[0, :5, :])
+        print('==============')
+
+        # Average two strands predictions
+        x = RegConcatLayer(reg=self.last_reg)(x)
+        rcx = RegConcatLayer(reg=self.last_reg)(rcx)
+
+        print(x.numpy()[0, :5, :])
+        print('reversed')
+        print(rcx.numpy()[0, :5, :])
+        print()
+
+        x = self.pool(x)
+        rcx = self.pool(rcx)
+
+        print(x.shape)
+        print(x.numpy()[0, :5, :])
+        print('reversed')
+        print(rcx.numpy()[0, :5, :])
+        print()
+
+        x = self.flattener(x)
+        rcx = self.flattener(rcx)
+
         # print(x.numpy()[0, :5])
         # print('reversed')
         # print(rcx.numpy()[0, :5])
@@ -733,7 +952,7 @@ if __name__ == '__main__':
         # outputs = ActivationLayer(a_1, b_1)(outputs)
         # model = keras.Model(inputs, outputs)
         # model.summary()
-        model = EquiNet(placeholder_bn=True).func_api_model()
+        model = EquiNetBinary(placeholder_bn=True).func_api_model()
         model.summary()
         model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
         model.fit_generator(generator)
@@ -752,10 +971,12 @@ if __name__ == '__main__':
         x = tf.random.uniform((2, 1000, 4))
         # x2 = x[:, ::-1, ::-1]
         print('without BN')
-        out1 = EquiNet(placeholder_bn=True).eager_call(x)
-        print()
-        print('with BN')
-        out2 = EquiNet(placeholder_bn=False).eager_call(x)
+        # out1 = RCNetBinary(placeholder_bn=True).eager_call(x)
+        out1 = EquiNetBinary(placeholder_bn=True).eager_call(x)
+        # print()
+        # print('with BN')
+        # out2 = RCNetBinary(placeholder_bn=False).eager_call(x)
+        # out2 = EquiNetBinary(placeholder_bn=False).eager_call(x)
         # print(x)
         # x = reg_irrep(x)
         # x = bn_irrep(x)

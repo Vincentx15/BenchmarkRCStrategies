@@ -54,8 +54,8 @@ class RevcompTackedOnSimpleCoordsBatchProducer(SimpleCoordsBatchProducer):
 
 
 def get_specific_generator(PARAMETERS, inputs_coordstovals, targets_coordstovals, model_arch, curr_seed):
-    train_file = "bpnet_%s_train_1k_around_summits.bed.gz" % PARAMETERS['dataset']
-    valid_file = "bpnet_%s_valid_1k_around_summits.bed.gz" % PARAMETERS['dataset']
+    train_file = f"data/{PARAMETERS['dataset']}/bpnet_{PARAMETERS['dataset']}_train_1k_around_summits.bed.gz"
+    valid_file = f"data/{PARAMETERS['dataset']}/bpnet_{PARAMETERS['dataset']}_valid_1k_around_summits.bed.gz"
     chromsizes_file = "data/mm10.chrom.sizes"
 
     if model_arch == "reg" or model_arch == "RevComp" or model_arch == "siamese" or model_arch == "RevComp_half":
@@ -192,8 +192,8 @@ class GeneralReverseComplement(AbstractCoordBatchTransformer):
         return [get_revcomp(x) for x in coords]
 
 
-def get_test_generator(dataset, inputs_coordstovals, targets_coordstovals, size, curr_seed):
-    test_file = "bpnet_%s_test_1k_around_summits.bed.gz" % dataset
+def get_test_generator(dataset, inputs_coordstovals, targets_coordstovals, curr_seed):
+    test_file = f"data/{dataset}/bpnet_dataset_test_1k_around_summits.bed.gz"
     # chromsizes_file = "data/mm10.chrom.sizes"
 
     keras_test_batch_generator = KerasBatchGenerator(
