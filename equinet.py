@@ -409,7 +409,7 @@ class RegBatchNorm(Layer):
             self.running_mu = tf.Variable(initial_value=tf.zeros([reg_dim]), trainable=False)
             self.running_sigma = tf.Variable(initial_value=tf.ones([reg_dim]), trainable=False)
 
-    def call(self, inputs, training=True):
+    def call(self, inputs, **kwargs):
         if self.placeholder:
             return inputs
         a = tf.shape(inputs)
@@ -417,38 +417,39 @@ class RegBatchNorm(Layer):
         length = a[1]
         division_over = batch_size * length
         division_over = tf.cast(division_over, tf.float32)
-        if training:
-            modified_inputs = K.concatenate(
-                tensors=[inputs[:, :, :self.reg_dim],
-                         inputs[:, :, self.reg_dim:][:, :, ::-1]],
-                axis=1)
-            mu_batch = tf.reduce_mean(modified_inputs, axis=(0, 1))
-            sigma_batch = tf.math.reduce_std(modified_inputs, axis=(0, 1)) + 0.01
-            normed_inputs = (modified_inputs - mu_batch) / sigma_batch * self.sigma + self.mu
 
-            self.running_mu = (self.running_mu * self.passed + division_over * mu_batch) / (
-                    self.passed + division_over)
-            self.running_sigma = (self.running_sigma * self.passed + division_over * sigma_batch) / (
-                    self.passed + division_over)
-            true_normed_inputs = K.concatenate(
-                tensors=[normed_inputs[:, :length, :],
-                         normed_inputs[:, length:, :][:, :, ::-1]],
-                axis=2)
-            return true_normed_inputs
+        modified_inputs = K.concatenate(
+            tensors=[inputs[:, :, :self.reg_dim],
+                     inputs[:, :, self.reg_dim:][:, :, ::-1]],
+            axis=1)
+        mu_batch = tf.reduce_mean(modified_inputs, axis=(0, 1))
+        sigma_batch = tf.math.reduce_std(modified_inputs, axis=(0, 1)) + 0.01
+        normed_inputs = (modified_inputs - mu_batch) / sigma_batch * self.sigma + self.mu
 
-        else:
-            modified_inputs = K.concatenate(
-                tensors=[inputs[:, :, :self.reg_dim],
-                         inputs[:, :, self.reg_dim:][:, :, ::-1]],
-                axis=1)
+        train_running_mu = (self.running_mu * self.passed + division_over * mu_batch) / (
+                self.passed + division_over)
+        train_running_sigma = (self.running_sigma * self.passed + division_over * sigma_batch) / (
+                self.passed + division_over)
+        self.passed = K.in_train_phase(self.passed + division_over, self.passed)
 
-            normed_inputs = (modified_inputs - self.running_mu) / self.running_sigma * self.sigma + self.mu
+        # Only update in train mode
+        self.running_mu = K.in_train_phase(train_running_mu, self.running_mu)
+        self.running_sigma = K.in_train_phase(train_running_sigma, self.running_sigma)
 
-            true_normed_inputs = K.concatenate(
-                tensors=[normed_inputs[:, :length, :],
-                         normed_inputs[:, length:, :][:, :, ::-1]],
-                axis=2)
-            return true_normed_inputs
+        train_true_normed_inputs = K.concatenate(
+            tensors=[normed_inputs[:, :length, :],
+                     normed_inputs[:, length:, :][:, :, ::-1]],
+            axis=2)
+
+        # Test mode
+        normed_inputs = (modified_inputs - self.running_mu) / self.running_sigma * self.sigma + self.mu
+        test_true_normed_inputs = K.concatenate(
+            tensors=[normed_inputs[:, :length, :],
+                     normed_inputs[:, length:, :][:, :, ::-1]],
+            axis=2)
+
+        out = K.in_train_phase(train_true_normed_inputs, test_true_normed_inputs)
+        return out
 
     def compute_output_shape(self, input_shape):
         return (input_shape[0], input_shape[1], input_shape[2])
@@ -459,8 +460,8 @@ class IrrepBatchNorm(Layer):
     BN layer for a_n, b_n feature map
     """
 
-    def __init__(self, a, b, placeholder=False):
-        super(IrrepBatchNorm, self).__init__()
+    def __init__(self, a, b, placeholder=False, **kwargs):
+        super(IrrepBatchNorm, self).__init__(**kwargs)
         self.a = a
         self.b = b
         self.placeholder = placeholder
@@ -483,7 +484,7 @@ class IrrepBatchNorm(Layer):
                                                name='sigma_a')
                 self.running_sigma_b = tf.Variable(initial_value=tf.ones([b]), trainable=False)
 
-    def call(self, inputs, training=True):
+    def call(self, inputs, **kwargs):
         if self.placeholder:
             return inputs
         a = tf.shape(inputs)
@@ -491,50 +492,60 @@ class IrrepBatchNorm(Layer):
         length = a[1]
         division_over = batch_size * length
         division_over = tf.cast(division_over, tf.float32)
-        if training:
-            a_outputs = None
-            if self.a > 0:
-                a_inputs = inputs[:, :, :self.a]
-                mu_a_batch = tf.reduce_mean(a_inputs, axis=(0, 1))
-                sigma_a_batch = tf.math.reduce_std(a_inputs, axis=(0, 1)) + 0.01
-                a_outputs = (a_inputs - mu_a_batch) / sigma_a_batch * self.sigma_a + self.mu_a
 
-                self.running_mu_a = (self.running_mu_a * self.passed + division_over * mu_a_batch) / (
-                        self.passed + division_over)
-                self.running_sigma_a = (self.running_sigma_a * self.passed + division_over * sigma_a_batch) / (
-                        self.passed + division_over)
+        a_outputs = None
+        if self.a > 0:
+            a_inputs = inputs[:, :, :self.a]
+            mu_a_batch = tf.reduce_mean(a_inputs, axis=(0, 1))
+            sigma_a_batch = tf.math.reduce_std(a_inputs, axis=(0, 1)) + 0.01
+            a_outputs = (a_inputs - mu_a_batch) / sigma_a_batch * self.sigma_a + self.mu_a
 
-            # For b_dims, we compute some kind of averaged over group action mean/std
-            if self.b > 0:
-                b_inputs = inputs[:, :, self.a:]
-                numerator = tf.math.sqrt(tf.math.reduce_sum(tf.math.square(b_inputs), axis=(0, 1)))
-                sigma_b_batch = numerator / tf.math.sqrt(division_over) + 0.01
-                b_outputs = b_inputs / sigma_b_batch * self.sigma_b
+            train_running_mu_a = (self.running_mu_a * self.passed + division_over * mu_a_batch) / (
+                    self.passed + division_over)
+            train_running_sigma_a = (self.running_sigma_a * self.passed + division_over * sigma_a_batch) / (
+                    self.passed + division_over)
 
-                self.running_sigma_b = (self.running_sigma_b * self.passed + division_over * sigma_b_batch) / (
-                        self.passed + division_over)
-                self.passed = self.passed + division_over
-                if a_outputs is not None:
-                    return K.concatenate((a_outputs, b_outputs), axis=-1)
-                else:
-                    return b_outputs
-            self.passed = self.passed + division_over
-            return a_outputs
+            self.running_mu_a = K.in_train_phase(train_running_mu_a, self.running_mu_a)
+            self.running_sigma_a = K.in_train_phase(train_running_sigma_a, self.running_sigma_a)
+
+        # For b_dims, we compute some kind of averaged over group action mean/std
+        if self.b > 0:
+            b_inputs = inputs[:, :, self.a:]
+            numerator = tf.math.sqrt(tf.math.reduce_sum(tf.math.square(b_inputs), axis=(0, 1)))
+            sigma_b_batch = numerator / tf.math.sqrt(division_over) + 0.01
+            b_outputs = b_inputs / sigma_b_batch * self.sigma_b
+
+            train_running_sigma_b = (self.running_sigma_b * self.passed + division_over * sigma_b_batch) / (
+                    self.passed + division_over)
+            self.running_sigma_b = K.in_train_phase(train_running_sigma_b, self.running_sigma_b)
+
+            if a_outputs is not None:
+                train_outputs = K.concatenate((a_outputs, b_outputs), axis=-1)
+            else:
+                train_outputs = b_outputs
         else:
-            a_outputs = None
-            if self.a > 0:
-                a_inputs = inputs[:, :, :self.a]
-                a_outputs = (a_inputs - self.running_mu_a) / self.running_sigma_a * self.sigma_a + self.mu_a
+            train_outputs = a_outputs
+        self.passed = K.in_train_phase(self.passed + division_over, self.passed)
 
-            # For b_dims, we compute some kind of averaged over group action mean/std
-            if self.b > 0:
-                b_inputs = inputs[:, :, self.a:]
-                b_outputs = b_inputs / self.running_sigma_b * self.sigma_b
-                if a_outputs is not None:
-                    return K.concatenate((a_outputs, b_outputs), axis=-1)
-                else:
-                    return b_outputs
-            return a_outputs
+        test_a_outputs = None
+        if self.a > 0:
+            a_inputs = inputs[:, :, :self.a]
+            test_a_outputs = (a_inputs - self.running_mu_a) / self.running_sigma_a * self.sigma_a + self.mu_a
+
+        # For b_dims, we compute some kind of averaged over group action mean/std
+        if self.b > 0:
+            b_inputs = inputs[:, :, self.a:]
+            test_b_outputs = b_inputs / self.running_sigma_b * self.sigma_b
+            if test_a_outputs is not None:
+                test_outputs = K.concatenate((test_a_outputs, test_b_outputs), axis=-1)
+            else:
+                test_outputs = test_b_outputs
+        else:
+            test_outputs = test_a_outputs
+
+        # By default, this value returns the test value for the eager mode.
+        out = K.in_train_phase(train_outputs, test_outputs)
+        return out
 
 
 class IrrepConcatLayer(Layer):
@@ -570,9 +581,6 @@ class RegConcatLayer(Layer):
         self.reg = reg
 
     def call(self, inputs):
-        # print('a', inputs[:, :, :self.reg][0, :5, :])
-        # print('b', inputs[:, :, self.reg:][0, :5, :])
-        # print('c', inputs[:, :, self.reg:][:, ::-1, ::-1][0, :5, :])
         outputs = (inputs[:, :, :self.reg] + inputs[:, :, self.reg:][:, ::-1, ::-1]) / 2
         return outputs
 
@@ -826,10 +834,10 @@ class RCNetBinary:
         x = RegConcatLayer(reg=self.last_reg)(x)
         rcx = RegConcatLayer(reg=self.last_reg)(rcx)
 
-        print(x.numpy()[0, :5, :])
-        print('reversed')
-        print(rcx.numpy()[0, :5, :])
-        print()
+        # print(x.numpy()[0, :5, :])
+        # print('reversed')
+        # print(rcx.numpy()[0, :5, :])
+        # print()
 
         x = self.pool(x)
         rcx = self.pool(rcx)
@@ -915,6 +923,7 @@ if __name__ == '__main__':
 
     # generator = Generator(outfeat=3, outlen=993, eager=eager)
     generator = Generator(binary=True)
+    val_generator = Generator(binary=True)
     # inputs, targets = generator[2]
     # print(inputs.shape)
     # print(targets.shape)
@@ -964,17 +973,21 @@ if __name__ == '__main__':
         # out2 = model.predict(rcx)
         # print(out2)
 
-
         # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
         # outputs = reg_irrep(inputs)
         # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
         # outputs = ActivationLayer(a_1, b_1)(outputs)
         # model = keras.Model(inputs, outputs)
         # model.summary()
-        # model = EquiNetBinary(placeholder_bn=True).func_api_model()
-        # model.summary()
-        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
-        # model.fit_generator(generator)
+        model = EquiNetBinary(placeholder_bn=True).func_api_model()
+        model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
+        model.fit_generator(generator,
+                            validation_data=val_generator)
+
+        # loss_history = model.fit_generator(generator,
+        #                                    validation_data=(valid_data.X, valid_data.Y),
+        #                                    epochs=5,
+        #                                    steps_per_epoch=10,)
 
         # from keras_genomics.layers import RevCompConv1D
         # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
@@ -991,7 +1004,7 @@ if __name__ == '__main__':
         # x2 = x[:, ::-1, ::-1]
         # print('without BN')
         # out1 = RCNetBinary(placeholder_bn=True).eager_call(x)
-        # out1 = EquiNetBinary(placeholder_bn=True).eager_call(x)
+        out1 = EquiNetBinary(placeholder_bn=False).eager_call(x)
         # print()
         # print('with BN')
         # out2 = RCNetBinary(placeholder_bn=False).eager_call(x)
