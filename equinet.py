@@ -19,6 +19,7 @@ class RegToRegConv(Layer):
     """
 
     def __init__(self, reg_in, reg_out, kernel_size,
+                 dilatation=1,
                  padding='valid',
                  kernel_initializer='glorot_uniform'):
         super(RegToRegConv, self).__init__()
@@ -30,6 +31,7 @@ class RegToRegConv(Layer):
         self.kernel_size = kernel_size
         self.kernel_initializer = kernel_initializer
         self.padding = padding
+        self.dilatation = dilatation
 
         self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
                                            initializer=self.kernel_initializer,
@@ -69,7 +71,7 @@ class RegToRegConv(Layer):
     def compute_output_shape(self, input_shape):
         length = input_shape[1]
         if self.padding == 'valid':
-            return None, length - self.kernel_size + 1, self.filters
+            return None, length - self.kernel_size + 1 - (self.filters - 1) * (self.dilatation - 1), self.filters
         if self.padding == 'same':
             return None, length, self.filters
 
@@ -80,6 +82,7 @@ class RegToIrrepConv(Layer):
     """
 
     def __init__(self, reg_in, a_out, b_out, kernel_size,
+                 dilatation=1,
                  padding='valid',
                  kernel_initializer='glorot_uniform'):
         super(RegToIrrepConv, self).__init__()
@@ -92,6 +95,7 @@ class RegToIrrepConv(Layer):
         self.kernel_size = kernel_size
         self.kernel_initializer = kernel_initializer
         self.padding = padding
+        self.dilatation = dilatation
 
         self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
                                            initializer=self.kernel_initializer,
@@ -155,7 +159,95 @@ class RegToIrrepConv(Layer):
     def compute_output_shape(self, input_shape):
         length = input_shape[1]
         if self.padding == 'valid':
-            return None, length - self.kernel_size + 1, self.filters
+            return None, length - self.kernel_size + 1 - (self.filters - 1) * (self.dilatation - 1), self.filters
+        if self.padding == 'same':
+            return None, length, self.filters
+
+
+class IrrepToRegConv(Layer):
+    """
+    Mapping from one irrep layer to another
+    """
+
+    def __init__(self, reg_out, a_in, b_in, kernel_size,
+                 dilatation=1,
+                 padding='valid',
+                 kernel_initializer='glorot_uniform'):
+        super(IrrepToRegConv, self).__init__()
+        self.reg_out = reg_out
+        self.a_in = a_in
+        self.b_in = b_in
+        self.input_dim = a_in + b_in
+        self.filters = 2 * reg_out
+
+        self.kernel_size = kernel_size
+        self.kernel_initializer = kernel_initializer
+        self.padding = padding
+        self.dilatation = dilatation
+
+        self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
+                                           initializer=self.kernel_initializer,
+                                           name='left_kernel')
+
+        # odd size : To get the equality for x=0, we need to have transposed columns + flipped bor the b_in dims
+        if self.kernel_size % 2 == 1:
+            if self.a_in > 0:
+                self.top_left = self.add_weight(shape=(1, self.a_in, self.reg_out),
+                                                initializer=self.kernel_initializer,
+                                                name='center_kernel_tl')
+            if self.b_in > 0:
+                self.bottom_right = self.add_weight(shape=(1, self.b_in, self.reg_out),
+                                                    initializer=self.kernel_initializer,
+                                                    name='center_kernel_br')
+
+    def call(self, inputs, **kwargs):
+        # Build the right part of the kernel from the left one
+        # Rows are transposed, the b columns are flipped
+        if self.a_in == 0:
+            right_kernel = -self.left_kernel[::-1, self.a_in:, ::-1]
+        elif self.b_in == 0:
+            right_kernel = self.left_kernel[::-1, :self.a_in, ::-1]
+        else:
+            right_left = self.left_kernel[::-1, :self.a_in, ::-1]
+            right_right = -self.left_kernel[::-1, self.a_in:, ::-1]
+            right_kernel = K.concatenate((right_left, right_right), axis=1)
+
+        # Extra steps are needed for building the middle part when using the odd size
+        # We build the missing parts by transposing and flipping the sign of b_parts.
+        if self.kernel_size % 2 == 1:
+            if self.a_in == 0:
+                top_right = -self.bottom_right[:, :, ::-1]
+                right = K.concatenate((top_right, self.bottom_right), axis=2)
+                kernel = K.concatenate((self.left_kernel, right, right_kernel), axis=0)
+            elif self.b_in == 0:
+                bottom_left = self.top_left[:, :, ::-1]
+                left = K.concatenate((self.top_left, bottom_left), axis=2)
+                kernel = K.concatenate((self.left_kernel, left, right_kernel), axis=0)
+            else:
+                top_right = -self.bottom_right[:, :, ::-1]
+                bottom_left = self.top_left[:, :, ::-1]
+                left = K.concatenate((self.top_left, bottom_left), axis=2)
+                right = K.concatenate((top_right, self.bottom_right), axis=2)
+                center_kernel = K.concatenate((left, right), axis=1)
+                kernel = K.concatenate((self.left_kernel, center_kernel, right_kernel), axis=0)
+        else:
+            kernel = K.concatenate((self.left_kernel, right_kernel), axis=0)
+        outputs = K.conv1d(inputs,
+                           kernel,
+                           padding=self.padding)
+        return outputs
+
+    def get_config(self):
+        config = {'reg_out': self.reg_out,
+                  'a_in': self.a_in,
+                  'b_in': self.b_in}
+        base_config = super(IrrepToRegConv, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+    def compute_output_shape(self, input_shape):
+        length = input_shape[1]
+        if self.padding == 'valid':
+            return None, length - self.kernel_size + 1 - (self.filters - 1) * (self.dilatation - 1), self.filters
         if self.padding == 'same':
             return None, length, self.filters
 
@@ -166,6 +258,7 @@ class IrrepToIrrepConv(Layer):
     """
 
     def __init__(self, a_in, a_out, b_in, b_out, kernel_size,
+                 dilatation=1,
                  padding='valid',
                  kernel_initializer='glorot_uniform'):
         super(IrrepToIrrepConv, self).__init__()
@@ -180,6 +273,7 @@ class IrrepToIrrepConv(Layer):
         self.kernel_size = kernel_size
         self.kernel_initializer = kernel_initializer
         self.padding = padding
+        self.dilatation = dilatation
 
         self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
                                            initializer=self.kernel_initializer,
@@ -355,7 +449,7 @@ class IrrepToIrrepConv(Layer):
     def compute_output_shape(self, input_shape):
         length = input_shape[1]
         if self.padding == 'valid':
-            return None, length - self.kernel_size + 1, self.filters
+            return None, length - self.kernel_size + 1 - (self.filters - 1) * (self.dilatation - 1), self.filters
         if self.padding == 'same':
             return None, length, self.filters
 
@@ -868,6 +962,8 @@ if __name__ == '__main__':
     if eager:
         tf.enable_eager_execution()
 
+    from BPNetArchs import RcBPNetArch
+
     curr_seed = 42
     np.random.seed(curr_seed)
     tf.set_random_seed(curr_seed)
@@ -906,6 +1002,48 @@ if __name__ == '__main__':
                 yield item
 
 
+    class BPNGenerator(Sequence):
+        def __init__(self, eager=False, inlen=1000, outlen=1000, infeat=4, outfeat=1, bs=1):
+            self.eager = eager
+            self.inlen = inlen
+            self.outlen = outlen
+            self.infeat = infeat
+            self.outfeat = outfeat
+            self.bs = bs
+
+        def __getitem__(self, item):
+            if self.eager:
+                inputs_1 = tf.random.uniform(size=(self.bs, self.inlen, self.infeat))
+                inputs_2 = tf.random.uniform(size=(self.bs, self.outfeat))
+                inputs_3 = tf.random.uniform(size=(self.bs, self.outlen, self.outfeat))
+                inputs = {'sequence': inputs_1,
+                          'patchcap.logcount': inputs_2,
+                          'patchcap.profile': inputs_3}
+                targets_1 = tf.random.uniform(size=(self.bs, self.outfeat))
+                targets_2 = tf.random.uniform(size=(self.bs, self.outlen, self.outfeat))
+                targets = {'CHIPNexus.SOX2.logcount': targets_1,
+                           'CHIPNexus.SOX2.profile': targets_2}
+            else:
+                inputs_1 = np.random.uniform(size=(self.bs, self.inlen, self.infeat))
+                inputs_2 = np.random.uniform(size=(self.bs, self.outfeat))
+                inputs_3 = np.random.uniform(size=(self.bs, self.outlen, self.outfeat))
+                inputs = {'sequence': inputs_1,
+                          'patchcap.logcount': inputs_2,
+                          'patchcap.profile': inputs_3}
+                targets_1 = np.random.uniform(size=(self.bs, self.outfeat))
+                targets_2 = np.random.uniform(size=(self.bs, self.outlen, self.outfeat))
+                targets = {'CHIPNexus.SOX2.logcount': targets_1,
+                           'CHIPNexus.SOX2.profile': targets_2}
+            return inputs, targets
+
+        def __len__(self):
+            return 10
+
+        def __iter__(self):
+            for item in (self[i] for i in range(len(self))):
+                yield item
+
+
     # Now create the layers objects
 
     a_1 = 2
@@ -928,6 +1066,11 @@ if __name__ == '__main__':
                                b_out=b_1,
                                kernel_size=8)
 
+    irrep_reg = IrrepToRegConv(reg_out=2,
+                               a_in=a_1,
+                               b_in=b_1,
+                               kernel_size=9)
+
     irrep_irrep = IrrepToIrrepConv(a_in=a_1,
                                    b_in=b_1,
                                    a_out=a_2,
@@ -946,6 +1089,7 @@ if __name__ == '__main__':
     # Keras Style
     if not eager:
         pass
+
         # CHECK EQUIVARIANCE of the rcps : to me it should not be equivariant
         #   because of the maxpooling that is called too soon
 
@@ -963,7 +1107,6 @@ if __name__ == '__main__':
         # print(out1)
         # out2 = model.predict(rcx)
         # print(out2)
-
 
         # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
         # outputs = reg_irrep(inputs)
@@ -986,9 +1129,33 @@ if __name__ == '__main__':
         # outputs = reg_irrep(inputs)
         # outputs = ActivationLayer(a_1, b_1)(outputs)
         # model = keras.Model(inputs, outputs)
+
+        # ========= BPNets ===========
+
+        PARAMETERS = {
+            'dataset': 'SOX2',
+            'input_seq_len': 1346,
+            'c_task_weight': 0,
+            'p_task_weight': 1,
+            'filters': 64,
+            'n_dil_layers': 6,
+            'conv1_kernel_size': 21,
+            'dil_kernel_size': 3,
+            'outconv_kernel_size': 75,
+            'optimizer': 'Adam',
+            'weight_decay': 0.01,
+            'lr': 0.001,
+            'size': 100,
+            'kernel_initializer': "glorot_uniform",
+            'seed': 42
+        }
+        rc_model = RcBPNetArch(is_add=True, **PARAMETERS).get_keras_model()
+        generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager)
+        rc_model.fit_generator(generator)
+
     if eager:
         x = tf.random.uniform((2, 1000, 4))
-        # x2 = x[:, ::-1, ::-1]
+        x2 = x[:, ::-1, ::-1]
         # print('without BN')
         # out1 = RCNetBinary(placeholder_bn=True).eager_call(x)
         # out1 = EquiNetBinary(placeholder_bn=True).eager_call(x)
@@ -1001,8 +1168,10 @@ if __name__ == '__main__':
         # x = bn_irrep(x)
         # x = tf.math.reduce_mean(x, axis=(1,2))
         # out1 = reg_irrep(x)
+        # out1 = irrep_reg(out1)
         # out1 = bn_irrep(out1)
         # out2 = reg_irrep(x2)
+        # out2 = irrep_reg(out2)
         # out2 = bn_irrep(out2)
         # print(out1[0, :5, :].numpy())
         # out1 = ActivationLayer(a_1, b_1)(out1)
