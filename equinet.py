@@ -21,8 +21,9 @@ class RegToRegConv(Layer):
     def __init__(self, reg_in, reg_out, kernel_size,
                  dilatation=1,
                  padding='valid',
-                 kernel_initializer='glorot_uniform'):
-        super(RegToRegConv, self).__init__()
+                 kernel_initializer='glorot_uniform',
+                 **kwargs):
+        super(RegToRegConv, self).__init__(**kwargs)
         self.reg_in = reg_in
         self.reg_out = reg_out
         self.input_dim = 2 * reg_in
@@ -59,7 +60,8 @@ class RegToRegConv(Layer):
             kernel = K.concatenate((self.left_kernel, right_kernel), axis=0)
         outputs = K.conv1d(inputs,
                            kernel,
-                           padding=self.padding)
+                           padding=self.padding,
+                           dilation_rate=self.dilatation)
         return outputs
 
     def get_config(self):
@@ -71,7 +73,7 @@ class RegToRegConv(Layer):
     def compute_output_shape(self, input_shape):
         length = input_shape[1]
         if self.padding == 'valid':
-            return None, length - self.kernel_size + 1 - (self.filters - 1) * (self.dilatation - 1), self.filters
+            return None, length - self.kernel_size + 1 - (self.kernel_size - 1) * (self.dilatation - 1), self.filters
         if self.padding == 'same':
             return None, length, self.filters
 
@@ -146,7 +148,8 @@ class RegToIrrepConv(Layer):
             kernel = K.concatenate((self.left_kernel, right_kernel), axis=0)
         outputs = K.conv1d(inputs,
                            kernel,
-                           padding=self.padding)
+                           padding=self.padding,
+                           dilation_rate=self.dilatation)
         return outputs
 
     def get_config(self):
@@ -159,7 +162,7 @@ class RegToIrrepConv(Layer):
     def compute_output_shape(self, input_shape):
         length = input_shape[1]
         if self.padding == 'valid':
-            return None, length - self.kernel_size + 1 - (self.filters - 1) * (self.dilatation - 1), self.filters
+            return None, length - self.kernel_size + 1 - (self.kernel_size - 1) * (self.dilatation - 1), self.filters
         if self.padding == 'same':
             return None, length, self.filters
 
@@ -234,7 +237,8 @@ class IrrepToRegConv(Layer):
             kernel = K.concatenate((self.left_kernel, right_kernel), axis=0)
         outputs = K.conv1d(inputs,
                            kernel,
-                           padding=self.padding)
+                           padding=self.padding,
+                           dilation_rate=self.dilatation)
         return outputs
 
     def get_config(self):
@@ -247,7 +251,7 @@ class IrrepToRegConv(Layer):
     def compute_output_shape(self, input_shape):
         length = input_shape[1]
         if self.padding == 'valid':
-            return None, length - self.kernel_size + 1 - (self.filters - 1) * (self.dilatation - 1), self.filters
+            return None, length - self.kernel_size + 1 - (self.kernel_size - 1) * (self.dilatation - 1), self.filters
         if self.padding == 'same':
             return None, length, self.filters
 
@@ -435,7 +439,8 @@ class IrrepToIrrepConv(Layer):
 
         outputs = K.conv1d(inputs,
                            kernel,
-                           padding=self.padding)
+                           padding=self.padding,
+                           dilation_rate=self.dilatation)
         return outputs
 
     def get_config(self):
@@ -449,7 +454,7 @@ class IrrepToIrrepConv(Layer):
     def compute_output_shape(self, input_shape):
         length = input_shape[1]
         if self.padding == 'valid':
-            return None, length - self.kernel_size + 1 - (self.filters - 1) * (self.dilatation - 1), self.filters
+            return None, length - self.kernel_size + 1 - (self.kernel_size - 1) * (self.dilatation - 1), self.filters
         if self.padding == 'same':
             return None, length, self.filters
 
@@ -820,6 +825,223 @@ class EquiNetBinary:
         return outputs
 
 
+# Loss Function
+def multinomial_nll(true_counts, logits):
+    """Compute the multinomial negative log-likelihood
+    Args:
+      true_counts: observed count values
+      logits: predicted logit values
+    """
+    counts_per_example = tf.reduce_sum(true_counts, axis=-1)
+    dist = tf.compat.v1.distributions.Multinomial(total_count=counts_per_example,
+                                                  logits=logits)
+    return (-tf.reduce_sum(dist.log_prob(true_counts)) /
+            tf.cast((tf.shape(true_counts)[0]), tf.float32))
+
+
+# from https://github.com/kundajelab/basepair/blob/cda0875571066343cdf90aed031f7c51714d991a/basepair/losses.py#L87
+class MultichannelMultinomialNLL(object):
+    def __init__(self, n):
+        self.__name__ = "MultichannelMultinomialNLL"
+        self.n = n
+
+    def __call__(self, true_counts, logits):
+        for i in range(self.n):
+            loss = multinomial_nll(true_counts[..., i], logits[..., i])
+            if i == 0:
+                total = loss
+            else:
+                total += loss
+        return total
+
+    def get_config(self):
+        return {"n": self.n}
+
+
+class EquiNetBP:
+    def __init__(self,
+                 dataset,
+                 input_seq_len=1346,
+                 c_task_weight=0,
+                 p_task_weight=1,
+                 filters=((64, 64), (64, 64), (64, 64), (64, 64), (64, 64), (64, 64), (64, 64)),
+                 kernel_sizes=(21, 3, 3, 3, 3, 3, 3, 75),
+                 outconv_kernel_size=75,
+                 weight_decay=0.01,
+                 optimizer='Adam',
+                 lr=0.001,
+                 kernel_initializer="glorot_uniform",
+                 seed=42,
+                 is_add=True,
+                 **kwargs):
+        self.dataset = dataset
+        self.input_seq_len = input_seq_len
+        self.c_task_weight = c_task_weight
+        self.p_task_weight = p_task_weight
+        self.filters = filters
+        self.kernel_sizes = kernel_sizes
+        self.outconv_kernel_size = outconv_kernel_size
+        self.optimizer = optimizer
+        self.weight_decay = weight_decay
+        self.lr = lr
+        self.learning_rate = lr
+        self.kernel_initializer = kernel_initializer
+        self.seed = seed
+        self.is_add = is_add
+        self.n_dil_layers = len(filters) - 1
+        countouttaskname, profileouttaskname = self.get_names()
+
+        first_a, first_b = filters[0]
+        self.conv1_kernel_size = kernel_sizes[0]
+        self.first_conv = RegToIrrepConv(reg_in=2,
+                                         a_out=first_a,
+                                         b_out=first_b,
+                                         kernel_size=self.conv1_kernel_size,
+                                         kernel_initializer=self.kernel_initializer,
+                                         padding='valid')
+        self.first_act = IrrepActivationLayer(a=first_a, b=first_b)
+
+        # Now add the intermediate layer : sequence of conv, activation
+        self.irrep_layers = []
+        self.activation_layers = []
+        self.croppings = []
+        for i in range(1, len(filters)):
+            prev_a, prev_b = filters[i - 1]
+            next_a, next_b = filters[i]
+            dilation_rate = 2 ** i
+            self.irrep_layers.append(IrrepToIrrepConv(
+                a_in=prev_a,
+                b_in=prev_b,
+                a_out=next_a,
+                b_out=next_b,
+                kernel_size=kernel_sizes[i],
+                dilatation=dilation_rate
+            ))
+            self.croppings.append((kernel_sizes[i] - 1) * dilation_rate)
+            # self.bn_layers.append(IrrepBatchNorm(a=next_a, b=next_b, placeholder=placeholder_bn))
+            self.activation_layers.append(IrrepActivationLayer(a=next_a, b=next_b))
+
+        self.last_a, self.last_b = filters[-1]
+        self.prebias = IrrepToRegConv(reg_out=1,
+                                      a_in=self.last_a,
+                                      b_in=self.last_b,
+                                      kernel_size=self.outconv_kernel_size,
+                                      kernel_initializer=self.kernel_initializer,
+                                      padding='valid')
+        self.last = RegToRegConv(reg_in=3,
+                                 reg_out=1,
+                                 kernel_size=1,
+                                 kernel_initializer=self.kernel_initializer,
+                                 padding='valid',
+                                 name=profileouttaskname)
+
+        self.densecounts = kl.Dense(2, name=countouttaskname)
+
+    def get_output_profile_len(self):
+        embedding_len = self.input_seq_len
+        embedding_len -= (self.conv1_kernel_size - 1)
+        for cropping in self.croppings:
+            embedding_len -= cropping
+        out_profile_len = embedding_len - (self.outconv_kernel_size - 1)
+        return out_profile_len
+
+    def trim_flanks_of_inputs(self, inputs, output_len, width_to_trim, filters):
+        layer = keras.layers.Lambda(
+            function=lambda x: x[:, int(0.5 * (width_to_trim)):-(width_to_trim - int(0.5 * (width_to_trim)))],
+            output_shape=(output_len, filters))(inputs)
+        return layer
+
+    def get_inputs(self):
+        out_pred_len = self.get_output_profile_len()
+
+        inp = kl.Input(shape=(self.input_seq_len, 4), name='sequence')
+        if self.dataset == "SPI1":
+            bias_counts_input = kl.Input(shape=(1,), name="control_logcount")
+            bias_profile_input = kl.Input(shape=(out_pred_len, 2),
+                                          name="control_profile")
+        else:
+            bias_counts_input = kl.Input(shape=(2,), name="patchcap.logcount")
+            # if working with raw counts, go from logcount->count
+            bias_profile_input = kl.Input(shape=(out_pred_len, 2),
+                                          name="patchcap.profile")
+        return inp, bias_counts_input, bias_profile_input
+
+    def get_names(self):
+        if self.dataset == "SPI1":
+            countouttaskname = "task0_logcount"
+            profileouttaskname = "task0_profile"
+        elif self.dataset == 'NANOG':
+            countouttaskname = "CHIPNexus.NANOG.logcount"
+            profileouttaskname = "CHIPNexus.NANOG.profile"
+        elif self.dataset == "OCT4":
+            countouttaskname = "CHIPNexus.OCT4.logcount"
+            profileouttaskname = "CHIPNexus.OCT4.profile"
+        elif self.dataset == "KLF4":
+            countouttaskname = "CHIPNexus.KLF4.logcount"
+            profileouttaskname = "CHIPNexus.KLF4.profile"
+        elif self.dataset == "SOX2":
+            countouttaskname = "CHIPNexus.SOX2.logcount"
+            profileouttaskname = "CHIPNexus.SOX2.profile"
+        return countouttaskname, profileouttaskname
+
+    def get_keras_model(self):
+        np.random.seed(self.seed)
+        tf.set_random_seed(self.seed)
+
+        sequence_input, bias_counts_input, bias_profile_input = self.get_inputs()
+        countouttaskname, profileouttaskname = self.get_names()
+
+        curr_layer_size = self.input_seq_len - (self.conv1_kernel_size - 1)
+        prev_layers = self.first_conv(sequence_input)
+
+        for i, (conv_layer, activation_layer, cropping) in enumerate(zip(self.irrep_layers,
+                                                                         self.activation_layers,
+                                                                         self.croppings)):
+
+            conv_output = conv_layer(prev_layers)
+            conv_output = activation_layer(conv_output)
+            curr_layer_size = curr_layer_size - cropping
+
+            trimmed_prev_layers = self.trim_flanks_of_inputs(inputs=prev_layers,
+                                                             output_len=curr_layer_size,
+                                                             width_to_trim=cropping,
+                                                             filters=self.filters[i][0] + self.filters[i][1])
+            # print('prev_layer', prev_layers.shape)
+            # print('trimmed', trimmed_prev_layers.shape)
+            # print('convoluted', conv_output.shape)
+            # print('cropping', cropping)
+            # print()
+            if self.is_add:
+                prev_layers = kl.add([trimmed_prev_layers, conv_output])
+            else:
+                prev_layers = kl.average([trimmed_prev_layers, conv_output])
+
+        combined_conv = prev_layers
+
+        # Placeholder for counts
+        pooled = kl.GlobalAvgPool1D()(combined_conv)
+        count_out = self.densecounts(pooled)
+
+        # Profile prediction
+        profile_out_prebias = self.prebias(combined_conv)
+
+        # concatenation of the bias layer both before and after is needed for rc symmetry
+        concatenated = kl.concatenate([kl.Lambda(lambda x: x[:, :, ::-1])(bias_profile_input),
+                                       profile_out_prebias,
+                                       bias_profile_input], axis=-1)
+
+        profile_out = self.last(concatenated)
+
+        model = keras.models.Model(
+            inputs=[sequence_input, bias_counts_input, bias_profile_input],
+            outputs=[count_out, profile_out])
+
+        model.compile(keras.optimizers.Adam(lr=self.lr),
+                      loss=['mse', MultichannelMultinomialNLL(2)],
+                      loss_weights=[self.c_task_weight, self.p_task_weight])
+        return model
+
+
 class RCNetBinary:
 
     def __init__(self,
@@ -1150,6 +1372,9 @@ if __name__ == '__main__':
             'seed': 42
         }
         rc_model = RcBPNetArch(is_add=True, **PARAMETERS).get_keras_model()
+        print(rc_model.summary())
+        rc_model = EquiNetBP(dataset='SOX2').get_keras_model()
+        print(rc_model.summary())
         generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager)
         rc_model.fit_generator(generator)
 

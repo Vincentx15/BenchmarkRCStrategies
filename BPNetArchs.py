@@ -225,7 +225,7 @@ class RcBPNetArch(AbstractProfileModel):
             inputs=[inp, bias_counts_input, bias_profile_input],
             outputs=[count_out, profile_out])
 
-        if (self.optimizer == "Adam"):
+        if self.optimizer == "Adam":
             model.compile(keras.optimizers.Adam(lr=self.lr),
                           loss=['mse', MultichannelMultinomialNLL(2)],
                           loss_weights=[self.c_task_weight, self.p_task_weight])
