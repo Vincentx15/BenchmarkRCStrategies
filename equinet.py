@@ -859,7 +859,7 @@ class MultichannelMultinomialNLL(object):
         return {"n": self.n}
 
 
-class EquiNetBP:
+class EquiNetBP(Layer):
     def __init__(self,
                  dataset,
                  input_seq_len=1346,
@@ -875,6 +875,8 @@ class EquiNetBP:
                  seed=42,
                  is_add=True,
                  **kwargs):
+        super(EquiNetBP, self).__init__()
+
         self.dataset = dataset
         self.input_seq_len = input_seq_len
         self.c_task_weight = c_task_weight
@@ -1094,7 +1096,7 @@ class EquiNetBP:
 
         profile_out = self.last(concatenated)
 
-        return profile_out, count_out
+        return count_out, profile_out
 
 
 class RCNetBinary:
@@ -1250,6 +1252,7 @@ if __name__ == '__main__':
         """
         Toy generator to simulate the real ones, just feed placeholder random tensors
         """
+
         def __init__(self, eager=False, inlen=1000, outlen=1000, infeat=4, outfeat=1, bs=1, binary=False):
             self.eager = eager
             self.inlen = inlen
@@ -1286,6 +1289,7 @@ if __name__ == '__main__':
         """
         Also a toy generator to use for the BPN task (the output is a dict of tensors)
         """
+
         def __init__(self, eager=False, inlen=1000, outlen=1000, infeat=4, outfeat=1, bs=1):
             self.eager = eager
             self.inlen = inlen
@@ -1486,9 +1490,51 @@ if __name__ == '__main__':
         # print('reversed')
         # print(out2.numpy()[::-1])
 
-
-        # generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager, bs=2)
+        generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager, bs=2)
         # inputs = next(iter(generator))
         # a, b, c = inputs[0].values()
-        # rc_model = EquiNetBP(dataset='SOX2').eager_call(a, b, c)
+        rc_model = EquiNetBP(dataset='SOX2')
 
+
+        class testmodel:
+            def __init__(self):
+                super(testmodel, self).__init__()
+
+                a_1 = 2
+                b_1 = 2
+                a_2 = 2
+                b_2 = 2
+
+                self.reg_irrep = RegToIrrepConv(reg_in=2,
+                                                a_out=a_1,
+                                                b_out=b_1,
+                                                kernel_size=8)
+                self.irrep_bn = IrrepBatchNorm(a_1, b_1)
+                self.irrep_irrep = IrrepToIrrepConv(a_in=a_1,
+                                                    b_in=b_1,
+                                                    a_out=a_2,
+                                                    b_out=b_2,
+                                                    kernel_size=8)
+
+            def call(self, inputs):
+                outputs = self.reg_irrep(inputs)
+                outputs = self.irrep_bn(outputs)
+                outputs = self.irrep_irrep(outputs)
+                return outputs
+
+
+        epochs_to_train_for = 10
+        # model = testmodel()
+        model = rc_model
+        optimizer = tf.keras.optimizers.Adam()
+
+        for epoch in range(epochs_to_train_for):
+            for batch_idx, dicts_data in enumerate(generator):
+                ((a, b, c), (out_count, out_profile)) = dicts_data[0].values(), dicts_data[1].values()
+                with tf.GradientTape() as tape:
+                    count, profile = model.eager_call(a, b, c)
+                    loss = tf.reduce_mean(tf.keras.losses.MSE(out_profile, profile))
+                    grads = tape.gradient(loss, model.trainable_weights)
+
+                optimizer.apply_gradients(zip(grads, model.trainable_weights))
+                print(loss.numpy().item())
