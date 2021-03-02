@@ -175,8 +175,9 @@ class IrrepToRegConv(Layer):
     def __init__(self, reg_out, a_in, b_in, kernel_size,
                  dilatation=1,
                  padding='valid',
-                 kernel_initializer='glorot_uniform'):
-        super(IrrepToRegConv, self).__init__()
+                 kernel_initializer='glorot_uniform',
+                 **kwargs):
+        super(IrrepToRegConv, self).__init__(**kwargs)
         self.reg_out = reg_out
         self.a_in = a_in
         self.b_in = b_in
@@ -935,7 +936,13 @@ class EquiNetBP:
                                  padding='valid',
                                  name=profileouttaskname)
 
-        self.densecounts = kl.Dense(2, name=countouttaskname)
+        # self.densecounts = kl.Dense(2, name=countouttaskname)
+        self.last_count = IrrepToRegConv(a_in=self.last_a + 2,
+                                         b_in=self.last_b,
+                                         reg_out=1,
+                                         kernel_size=1,
+                                         kernel_initializer=self.kernel_initializer,
+                                         name=countouttaskname)
 
     def get_output_profile_len(self):
         embedding_len = self.input_seq_len
@@ -985,11 +992,15 @@ class EquiNetBP:
         return countouttaskname, profileouttaskname
 
     def get_keras_model(self):
-        np.random.seed(self.seed)
-        tf.set_random_seed(self.seed)
+        """
+        Make a first convolution, then use skip connections with dilatations (that shrink the input)
+        to get 'combined_conv'
 
+        Then create two heads :
+         - one is used to predict counts (and has a weight of zero in the loss)
+         - one is used to predict the profile
+        """
         sequence_input, bias_counts_input, bias_profile_input = self.get_inputs()
-        countouttaskname, profileouttaskname = self.get_names()
 
         curr_layer_size = self.input_seq_len - (self.conv1_kernel_size - 1)
         prev_layers = self.first_conv(sequence_input)
@@ -1006,11 +1017,6 @@ class EquiNetBP:
                                                              output_len=curr_layer_size,
                                                              width_to_trim=cropping,
                                                              filters=self.filters[i][0] + self.filters[i][1])
-            # print('prev_layer', prev_layers.shape)
-            # print('trimmed', trimmed_prev_layers.shape)
-            # print('convoluted', conv_output.shape)
-            # print('cropping', cropping)
-            # print()
             if self.is_add:
                 prev_layers = kl.add([trimmed_prev_layers, conv_output])
             else:
@@ -1018,18 +1024,25 @@ class EquiNetBP:
 
         combined_conv = prev_layers
 
-        # Placeholder for counts
-        pooled = kl.GlobalAvgPool1D()(combined_conv)
-        count_out = self.densecounts(pooled)
+        # ============== Placeholder for counts =================
+        # count_out = bias_counts_input
 
-        # Profile prediction
+        gap_combined_conv = kl.GlobalAvgPool1D()(combined_conv)
+        stacked = kl.Reshape((1, -1))(kl.concatenate([
+            # concatenation of the bias layer both before and after
+            # is needed for rc symmetry
+            kl.Lambda(lambda x: x[:, ::-1])(bias_counts_input),
+            gap_combined_conv,
+            bias_counts_input], axis=-1))
+        convout = self.last_count(stacked)
+        count_out = kl.Reshape((-1,))(convout)
+
+        # ============== Profile prediction ======================
         profile_out_prebias = self.prebias(combined_conv)
-
         # concatenation of the bias layer both before and after is needed for rc symmetry
         concatenated = kl.concatenate([kl.Lambda(lambda x: x[:, :, ::-1])(bias_profile_input),
                                        profile_out_prebias,
                                        bias_profile_input], axis=-1)
-
         profile_out = self.last(concatenated)
 
         model = keras.models.Model(
@@ -1040,6 +1053,48 @@ class EquiNetBP:
                       loss=['mse', MultichannelMultinomialNLL(2)],
                       loss_weights=[self.c_task_weight, self.p_task_weight])
         return model
+
+    def eager_call(self, sequence_input, bias_counts_input, bias_profile_input):
+        """
+        Testing only
+        """
+        curr_layer_size = self.input_seq_len - (self.conv1_kernel_size - 1)
+        prev_layers = self.first_conv(sequence_input)
+
+        for i, (conv_layer, activation_layer, cropping) in enumerate(zip(self.irrep_layers,
+                                                                         self.activation_layers,
+                                                                         self.croppings)):
+
+            conv_output = conv_layer(prev_layers)
+            conv_output = activation_layer(conv_output)
+            curr_layer_size = curr_layer_size - cropping
+
+            trimmed_prev_layers = self.trim_flanks_of_inputs(inputs=prev_layers,
+                                                             output_len=curr_layer_size,
+                                                             width_to_trim=cropping,
+                                                             filters=self.filters[i][0] + self.filters[i][1])
+            if self.is_add:
+                prev_layers = kl.add([trimmed_prev_layers, conv_output])
+            else:
+                prev_layers = kl.average([trimmed_prev_layers, conv_output])
+
+        combined_conv = prev_layers
+
+        # Placeholder for counts
+        count_out = bias_counts_input
+
+        # Profile prediction
+        profile_out_prebias = self.prebias(combined_conv)
+
+        # concatenation of the bias layer both before and after is needed for rc symmetry
+        rc_profile_input = bias_profile_input[:, :, ::-1]
+        concatenated = K.concatenate([rc_profile_input,
+                                      profile_out_prebias,
+                                      bias_profile_input], axis=-1)
+
+        profile_out = self.last(concatenated)
+
+        return profile_out, count_out
 
 
 class RCNetBinary:
@@ -1184,7 +1239,7 @@ if __name__ == '__main__':
     if eager:
         tf.enable_eager_execution()
 
-    from BPNetArchs import RcBPNetArch
+    # from BPNetArchs import RcBPNetArch
 
     curr_seed = 42
     np.random.seed(curr_seed)
@@ -1192,6 +1247,9 @@ if __name__ == '__main__':
 
 
     class Generator(Sequence):
+        """
+        Toy generator to simulate the real ones, just feed placeholder random tensors
+        """
         def __init__(self, eager=False, inlen=1000, outlen=1000, infeat=4, outfeat=1, bs=1, binary=False):
             self.eager = eager
             self.inlen = inlen
@@ -1225,6 +1283,9 @@ if __name__ == '__main__':
 
 
     class BPNGenerator(Sequence):
+        """
+        Also a toy generator to use for the BPN task (the output is a dict of tensors)
+        """
         def __init__(self, eager=False, inlen=1000, outlen=1000, infeat=4, outfeat=1, bs=1):
             self.eager = eager
             self.inlen = inlen
@@ -1235,14 +1296,14 @@ if __name__ == '__main__':
 
         def __getitem__(self, item):
             if self.eager:
-                inputs_1 = tf.random.uniform(size=(self.bs, self.inlen, self.infeat))
-                inputs_2 = tf.random.uniform(size=(self.bs, self.outfeat))
-                inputs_3 = tf.random.uniform(size=(self.bs, self.outlen, self.outfeat))
+                inputs_1 = tf.random.uniform(shape=(self.bs, self.inlen, self.infeat))
+                inputs_2 = tf.random.uniform(shape=(self.bs, self.outfeat))
+                inputs_3 = tf.random.uniform(shape=(self.bs, self.outlen, self.outfeat))
                 inputs = {'sequence': inputs_1,
                           'patchcap.logcount': inputs_2,
                           'patchcap.profile': inputs_3}
-                targets_1 = tf.random.uniform(size=(self.bs, self.outfeat))
-                targets_2 = tf.random.uniform(size=(self.bs, self.outlen, self.outfeat))
+                targets_1 = tf.random.uniform(shape=(self.bs, self.outfeat))
+                targets_2 = tf.random.uniform(shape=(self.bs, self.outlen, self.outfeat))
                 targets = {'CHIPNexus.SOX2.logcount': targets_1,
                            'CHIPNexus.SOX2.profile': targets_2}
             else:
@@ -1274,7 +1335,7 @@ if __name__ == '__main__':
     b_2 = 1
 
     # generator = Generator(outfeat=3, outlen=993, eager=eager)
-    generator = Generator(binary=True)
+    # generator = Generator(binary=True)
     # inputs, targets = generator[2]
     # print(inputs.shape)
     # print(targets.shape)
@@ -1354,33 +1415,44 @@ if __name__ == '__main__':
 
         # ========= BPNets ===========
 
-        PARAMETERS = {
-            'dataset': 'SOX2',
-            'input_seq_len': 1346,
-            'c_task_weight': 0,
-            'p_task_weight': 1,
-            'filters': 64,
-            'n_dil_layers': 6,
-            'conv1_kernel_size': 21,
-            'dil_kernel_size': 3,
-            'outconv_kernel_size': 75,
-            'optimizer': 'Adam',
-            'weight_decay': 0.01,
-            'lr': 0.001,
-            'size': 100,
-            'kernel_initializer': "glorot_uniform",
-            'seed': 42
-        }
-        rc_model = RcBPNetArch(is_add=True, **PARAMETERS).get_keras_model()
-        print(rc_model.summary())
+        # generator = Generator(outfeat=4, outlen=985, eager=eager)
+        # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+        # outputs = reg_irrep(inputs)
+        # outputs = irrep_reg(outputs)
+        # model = keras.Model(inputs, outputs)
+        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+        #               loss="binary_crossentropy",
+        #               metrics=["accuracy"])
+        # model.fit_generator(generator)
+
+        # PARAMETERS = {
+        #     'dataset': 'SOX2',
+        #     'input_seq_len': 1346,
+        #     'c_task_weight': 0,
+        #     'p_task_weight': 1,
+        #     'filters': 64,
+        #     'n_dil_layers': 6,
+        #     'conv1_kernel_size': 21,
+        #     'dil_kernel_size': 3,
+        #     'outconv_kernel_size': 75,
+        #     'optimizer': 'Adam',
+        #     'weight_decay': 0.01,
+        #     'lr': 0.001,
+        #     'size': 100,
+        #     'kernel_initializer': "glorot_uniform",
+        #     'seed': 42
+        # }
+        # rc_model = RcBPNetArch(is_add=True, **PARAMETERS).get_keras_model()
+        # print(rc_model.summary())
         rc_model = EquiNetBP(dataset='SOX2').get_keras_model()
-        print(rc_model.summary())
+        # print(rc_model.summary())
         generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager)
         rc_model.fit_generator(generator)
 
     if eager:
         x = tf.random.uniform((2, 1000, 4))
         x2 = x[:, ::-1, ::-1]
+
         # print('without BN')
         # out1 = RCNetBinary(placeholder_bn=True).eager_call(x)
         # out1 = EquiNetBinary(placeholder_bn=True).eager_call(x)
@@ -1410,7 +1482,13 @@ if __name__ == '__main__':
         # x2 = x[:, ::-1, ::-1]
         # out1 = model(x)
         # out2 = model(x2)
-        #
         # print(out1.numpy())
         # print('reversed')
         # print(out2.numpy()[::-1])
+
+
+        # generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager, bs=2)
+        # inputs = next(iter(generator))
+        # a, b, c = inputs[0].values()
+        # rc_model = EquiNetBP(dataset='SOX2').eager_call(a, b, c)
+
