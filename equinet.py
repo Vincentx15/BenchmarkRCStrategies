@@ -393,10 +393,11 @@ class RegBatchNorm(Layer):
     BN layer for regular layers
     """
 
-    def __init__(self, reg_dim, placeholder=False):
+    def __init__(self, reg_dim, momentum=0.99, placeholder=False):
         super(RegBatchNorm, self).__init__()
         self.reg_dim = reg_dim
         self.placeholder = placeholder
+        self.momentum = momentum
 
         if not placeholder:
             self.passed = tf.Variable(initial_value=tf.constant(0, dtype=tf.float32), dtype=tf.float32, trainable=False)
@@ -423,32 +424,37 @@ class RegBatchNorm(Layer):
                      inputs[:, :, self.reg_dim:][:, :, ::-1]],
             axis=1)
         mu_batch = tf.reduce_mean(modified_inputs, axis=(0, 1))
-        sigma_batch = tf.math.reduce_std(modified_inputs, axis=(0, 1)) + 0.01
-        normed_inputs = (modified_inputs - mu_batch) / sigma_batch * self.sigma + self.mu
+        sigma_batch = tf.math.reduce_std(modified_inputs, axis=(0, 1)) + 0.0001
+        train_normed_inputs = (modified_inputs - mu_batch) / sigma_batch * self.sigma + self.mu
 
-        train_running_mu = (self.running_mu * self.passed + division_over * mu_batch) / (
-                self.passed + division_over)
-        train_running_sigma = (self.running_sigma * self.passed + division_over * sigma_batch) / (
-                self.passed + division_over)
+        # Only update the running means in train mode
+        # Momentum version :
+        train_running_mu = self.running_mu * self.momentum + mu_batch * (1 - self.momentum)
+        train_running_sigma = self.running_sigma * self.momentum + sigma_batch * (1 - self.momentum)
+        # train_running_mu = (self.running_mu * self.passed + division_over * mu_batch) / (
+        #         self.passed + division_over)
+        # train_running_sigma = (self.running_sigma * self.passed + division_over * sigma_batch) / (
+        #         self.passed + division_over)
+
         self.passed = K.in_train_phase(self.passed + division_over, self.passed)
-
-        # Only update in train mode
         self.running_mu = K.in_train_phase(train_running_mu, self.running_mu)
         self.running_sigma = K.in_train_phase(train_running_sigma, self.running_sigma)
 
         train_true_normed_inputs = K.concatenate(
-            tensors=[normed_inputs[:, :length, :],
-                     normed_inputs[:, length:, :][:, :, ::-1]],
+            tensors=[train_normed_inputs[:, :length, :],
+                     train_normed_inputs[:, length:, :][:, :, ::-1]],
             axis=2)
 
         # Test mode
-        normed_inputs = (modified_inputs - self.running_mu) / self.running_sigma * self.sigma + self.mu
+        test_normed_inputs = (modified_inputs - self.running_mu) / self.running_sigma * self.sigma + self.mu
         test_true_normed_inputs = K.concatenate(
-            tensors=[normed_inputs[:, :length, :],
-                     normed_inputs[:, length:, :][:, :, ::-1]],
+            tensors=[test_normed_inputs[:, :length, :],
+                     test_normed_inputs[:, length:, :][:, :, ::-1]],
             axis=2)
 
         out = K.in_train_phase(train_true_normed_inputs, test_true_normed_inputs)
+        # out = K.in_train_phase(train_true_normed_inputs, 0 * test_true_normed_inputs)
+        # out = K.in_train_phase(0 * test_true_normed_inputs, train_true_normed_inputs)
         return out
 
     def compute_output_shape(self, input_shape):
@@ -460,11 +466,12 @@ class IrrepBatchNorm(Layer):
     BN layer for a_n, b_n feature map
     """
 
-    def __init__(self, a, b, placeholder=False, **kwargs):
+    def __init__(self, a, b, placeholder=False, momentum=0.99, **kwargs):
         super(IrrepBatchNorm, self).__init__(**kwargs)
         self.a = a
         self.b = b
         self.placeholder = placeholder
+        self.momentum = momentum
 
         if not placeholder:
             self.passed = tf.Variable(initial_value=tf.constant(0, dtype=tf.float32), dtype=tf.float32, trainable=False)
@@ -493,18 +500,22 @@ class IrrepBatchNorm(Layer):
         division_over = batch_size * length
         division_over = tf.cast(division_over, tf.float32)
 
-        a_outputs = None
+        # ============== Compute training values ===================
+        # We have to compute statistics and update the running means if in train
+        train_a_outputs = None
         if self.a > 0:
             a_inputs = inputs[:, :, :self.a]
             mu_a_batch = tf.reduce_mean(a_inputs, axis=(0, 1))
-            sigma_a_batch = tf.math.reduce_std(a_inputs, axis=(0, 1)) + 0.01
-            a_outputs = (a_inputs - mu_a_batch) / sigma_a_batch * self.sigma_a + self.mu_a
+            sigma_a_batch = tf.math.reduce_std(a_inputs, axis=(0, 1)) + 0.0001
+            train_a_outputs = (a_inputs - mu_a_batch) / sigma_a_batch * self.sigma_a + self.mu_a
 
-            train_running_mu_a = (self.running_mu_a * self.passed + division_over * mu_a_batch) / (
-                    self.passed + division_over)
-            train_running_sigma_a = (self.running_sigma_a * self.passed + division_over * sigma_a_batch) / (
-                    self.passed + division_over)
-
+            # Momentum version :
+            train_running_mu_a = self.running_mu_a * self.momentum + mu_a_batch * (1 - self.momentum)
+            train_running_sigma_a = self.running_sigma_a * self.momentum + sigma_a_batch * (1 - self.momentum)
+            # train_running_mu_a = (self.running_mu_a * self.passed + division_over * mu_a_batch) / (
+            #         self.passed + division_over)
+            # train_running_sigma_a = (self.running_sigma_a * self.passed + division_over * sigma_a_batch) / (
+            #         self.passed + division_over)
             self.running_mu_a = K.in_train_phase(train_running_mu_a, self.running_mu_a)
             self.running_sigma_a = K.in_train_phase(train_running_sigma_a, self.running_sigma_a)
 
@@ -512,21 +523,26 @@ class IrrepBatchNorm(Layer):
         if self.b > 0:
             b_inputs = inputs[:, :, self.a:]
             numerator = tf.math.sqrt(tf.math.reduce_sum(tf.math.square(b_inputs), axis=(0, 1)))
-            sigma_b_batch = numerator / tf.math.sqrt(division_over) + 0.01
-            b_outputs = b_inputs / sigma_b_batch * self.sigma_b
+            sigma_b_batch = numerator / tf.math.sqrt(division_over) + 0.0001
+            train_b_outputs = b_inputs / sigma_b_batch * self.sigma_b
 
-            train_running_sigma_b = (self.running_sigma_b * self.passed + division_over * sigma_b_batch) / (
-                    self.passed + division_over)
+            # Momentum version
+            train_running_sigma_b = self.running_sigma_b * self.momentum + sigma_b_batch * (1 - self.momentum)
+            # train_running_sigma_b = (self.running_sigma_b * self.passed + division_over * sigma_b_batch) / (
+            #         self.passed + division_over)
             self.running_sigma_b = K.in_train_phase(train_running_sigma_b, self.running_sigma_b)
+            # print(train_running_sigma_b)
 
-            if a_outputs is not None:
-                train_outputs = K.concatenate((a_outputs, b_outputs), axis=-1)
+            if train_a_outputs is not None:
+                train_outputs = K.concatenate((train_a_outputs, train_b_outputs), axis=-1)
             else:
-                train_outputs = b_outputs
+                train_outputs = train_b_outputs
+
         else:
-            train_outputs = a_outputs
+            train_outputs = train_a_outputs
         self.passed = K.in_train_phase(self.passed + division_over, self.passed)
 
+        # ============== Compute test values ====================
         test_a_outputs = None
         if self.a > 0:
             a_inputs = inputs[:, :, :self.a]
@@ -545,7 +561,12 @@ class IrrepBatchNorm(Layer):
 
         # By default, this value returns the test value for the eager mode.
         out = K.in_train_phase(train_outputs, test_outputs)
+        # out = K.in_train_phase(train_outputs, 0*test_outputs)
+        # out = K.in_train_phase(0 * test_outputs, train_outputs)
         return out
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0], input_shape[1], input_shape[2])
 
 
 class IrrepConcatLayer(Layer):
@@ -591,8 +612,8 @@ class RegConcatLayer(Layer):
 class EquiNetBinary:
 
     def __init__(self,
-                 filters=[(2, 2), (2, 2), (2, 2), (1, 1)],
-                 kernel_sizes=[5, 5, 7, 7],
+                 filters=((2, 2), (2, 2), (2, 2), (1, 1)),
+                 kernel_sizes=(5, 5, 7, 7),
                  pool_size=40,
                  pool_length=20,
                  out_size=1,
@@ -873,6 +894,7 @@ if __name__ == '__main__':
     from keras.utils import Sequence
 
     eager = False
+
     if eager:
         tf.enable_eager_execution()
 
@@ -893,17 +915,17 @@ if __name__ == '__main__':
 
         def __getitem__(self, item):
             if self.eager:
-                inputs = tf.random.uniform((self.bs, self.inlen, self.infeat))
+                inputs = tf.ones(shape=(self.bs, self.inlen, self.infeat))
                 if self.binary:
-                    targets = tf.random.uniform(1)
+                    targets = tf.ones(shape=(1))
                 else:
-                    targets = tf.random.uniform((self.bs, self.outlen, self.outfeat))
+                    targets = tf.ones(shape=(self.bs, self.outlen, self.outfeat))
             else:
-                inputs = np.random.uniform(size=(self.bs, self.inlen, self.infeat))
+                inputs = np.ones(shape=(self.bs, self.inlen, self.infeat))
                 if self.binary:
-                    targets = np.random.uniform(size=(self.bs, 1))
+                    targets = np.ones(shape=(self.bs, 1))
                 else:
-                    targets = np.random.uniform(size=(self.bs, self.outlen, self.outfeat))
+                    targets = np.ones(shape=(self.bs, self.outlen, self.outfeat))
             return inputs, targets
 
         def __len__(self):
@@ -918,10 +940,12 @@ if __name__ == '__main__':
 
     a_1 = 2
     b_1 = 2
+    reg_out = 2
     a_2 = 2
-    b_2 = 1
+    b_2 = 2
 
-    # generator = Generator(outfeat=3, outlen=993, eager=eager)
+    # generator = Generator(outfeat=4, outlen=986, eager=eager)
+    # val_generator = Generator(outfeat=4, outlen=986, eager=eager)
     generator = Generator(binary=True)
     val_generator = Generator(binary=True)
     # inputs, targets = generator[2]
@@ -929,8 +953,8 @@ if __name__ == '__main__':
     # print(targets.shape)
 
     reg_reg = RegToRegConv(reg_in=2,
-                           reg_out=2,
-                           kernel_size=7)
+                           reg_out=reg_out,
+                           kernel_size=8)
 
     reg_irrep = RegToIrrepConv(reg_in=2,
                                a_out=a_1,
@@ -941,7 +965,7 @@ if __name__ == '__main__':
                                    b_in=b_1,
                                    a_out=a_2,
                                    b_out=b_2,
-                                   kernel_size=5)
+                                   kernel_size=8)
     bn_irrep = IrrepBatchNorm(a=a_1,
                               b=b_1)
 
@@ -974,43 +998,56 @@ if __name__ == '__main__':
         # print(out2)
 
         # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+        # outputs = reg_reg(inputs)
+        # outputs = RegBatchNorm(reg_dim=reg_out)(outputs)
+
         # outputs = reg_irrep(inputs)
         # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
-        # outputs = ActivationLayer(a_1, b_1)(outputs)
+        # outputs = irrep_irrep(outputs)
+
+        # outputs = IrrepActivationLayer(a_1, b_1)(outputs)
         # model = keras.Model(inputs, outputs)
         # model.summary()
-        model = EquiNetBinary(placeholder_bn=True).func_api_model()
-        model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
+        model = EquiNetBinary(placeholder_bn=False).func_api_model()
+        model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="mse", metrics=["mse"])
         model.fit_generator(generator,
-                            validation_data=val_generator)
+                            validation_data=val_generator,
+                            epochs=50)
 
         # loss_history = model.fit_generator(generator,
         #                                    validation_data=(valid_data.X, valid_data.Y),
         #                                    epochs=5,
         #                                    steps_per_epoch=10,)
 
-        # from keras_genomics.layers import RevCompConv1D
-        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
-        #               loss="binary_crossentropy",
-        #               metrics=["accuracy"])
-
-        # model = RevCompConv1D(3,10)
-        # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-        # outputs = reg_irrep(inputs)
-        # outputs = ActivationLayer(a_1, b_1)(outputs)
-        # model = keras.Model(inputs, outputs)
     if eager:
-        x = tf.random.uniform((2, 1000, 4))
+        pass
+
+
+        # inputs = tf.random.uniform((2, 1000, 4))
+        # inputs = tf.ones((2, 1000, 4))
         # x2 = x[:, ::-1, ::-1]
         # print('without BN')
-        # out1 = RCNetBinary(placeholder_bn=True).eager_call(x)
-        out1 = EquiNetBinary(placeholder_bn=False).eager_call(x)
+        # out1 = RCNetBinary(placeholder_bn=False).eager_call(inputs)
+        # out1 = EquiNetBinary(placeholder_bn=False).eager_call(inputs)
+        # outputs = reg_irrep(inputs)
+        # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
+
+        # outputs = reg_reg(x)
+        # outputs = RegBatchNorm(reg_dim=reg_out)(inputs)
+        #
+        # outputs = reg_irrep(inputs)
+        # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
+        # outputs = irrep_irrep(outputs)
+
+        # print(outputs[0, :5, :].numpy())
+        # outputs = IrrepActivationLayer(a_1, b_1)(outputs)
+
         # print()
         # print('with BN')
-        # out2 = RCNetBinary(placeholder_bn=False).eager_call(x)
-        # out2 = EquiNetBinary(placeholder_bn=False).eager_call(x)
+        # out2 = RCNetBinary(placeholder_bn=False).eager_call(inputs)
+        # out2 = EquiNetBinary(placeholder_bn=False).eager_call(inputs)
         # print(x)
-        # x = reg_irrep(x)
+        # x = reg_irrep(inputs)
         # x = bn_irrep(x)
         # x = tf.math.reduce_mean(x, axis=(1,2))
         # out1 = reg_irrep(x)
@@ -1033,3 +1070,44 @@ if __name__ == '__main__':
         # print(out1.numpy())
         # print('reversed')
         # print(out2.numpy()[::-1])
+
+
+        class testmodel(tf.keras.Model):
+
+            def __init__(self):
+                super(testmodel, self).__init__()
+
+                a_1 = 2
+                b_1 = 2
+                a_2 = 2
+                b_2 = 2
+
+                self.reg_irrep = RegToIrrepConv(reg_in=2,
+                                                a_out=a_1,
+                                                b_out=b_1,
+                                                kernel_size=8)
+                self.irrep_bn = IrrepBatchNorm(a_1, b_1)
+                self.irrep_irrep = IrrepToIrrepConv(a_in=a_1,
+                                                    b_in=b_1,
+                                                    a_out=a_2,
+                                                    b_out=b_2,
+                                                    kernel_size=8)
+
+            def call(self, inputs):
+                outputs = self.reg_irrep(inputs)
+                outputs = self.irrep_bn(outputs)
+                outputs = self.irrep_irrep(outputs)
+                return outputs
+
+        # model = testmodel()
+        # optimizer = tf.keras.optimizers.Adam()
+        #
+        # for epoch in range(10):
+        #     for batch_idx, (batch_in, batch_out) in enumerate(generator):
+        #         with tf.GradientTape() as tape:
+        #             pred = model(batch_in)
+        #             loss = tf.reduce_mean(tf.keras.losses.MSE(batch_out, pred))
+        #             grads = tape.gradient(loss, model.trainable_weights)
+        #
+        #         optimizer.apply_gradients(zip(grads, model.trainable_weights))
+        #     print(loss.numpy())
