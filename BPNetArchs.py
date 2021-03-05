@@ -398,7 +398,7 @@ class StandardBPNetArch(AbstractProfileModel):
                 conv_layer=prev_layers, output_len=curr_layer_size,
                 width_to_trim=width_to_trim, filters=self.filters)
 
-            if (self.is_add):
+            if self.is_add:
                 prev_layers = kl.add([prev_layers, conv_output])
             else:
                 prev_layers = kl.average([prev_layers, conv_output])

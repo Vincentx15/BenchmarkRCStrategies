@@ -34,9 +34,10 @@ class RegToRegConv(Layer):
         self.padding = padding
         self.dilatation = dilatation
 
-        self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
-                                           initializer=self.kernel_initializer,
-                                           name='left_kernel')
+        if self.kernel_size > 1:
+            self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
+                                               initializer=self.kernel_initializer,
+                                               name='left_kernel')
 
         # odd size : To get the equality for x=0, we need to have transposed columns + flipped bor the b_out dims
         if self.kernel_size % 2 == 1:
@@ -47,17 +48,23 @@ class RegToRegConv(Layer):
     def call(self, inputs, **kwargs):
         # Build the right part of the kernel from the left one
         #
-
-        right_kernel = self.left_kernel[::-1, ::-1, ::-1]
+        if self.kernel_size > 1:
+            right_kernel = self.left_kernel[::-1, ::-1, ::-1]
 
         # Extra steps are needed for building the middle part when using the odd size
         # We build the missing parts by transposing everything.
         if self.kernel_size % 2 == 1:
             other_half = self.half_center[:, ::-1, ::-1]
             center_kernel = (other_half + self.half_center) / 2
-            kernel = K.concatenate((self.left_kernel, center_kernel, right_kernel), axis=0)
+            if self.kernel_size > 1:
+                kernel = K.concatenate((self.left_kernel, center_kernel, right_kernel), axis=0)
+            else:
+                kernel = center_kernel
         else:
-            kernel = K.concatenate((self.left_kernel, right_kernel), axis=0)
+            if self.kernel_size > 1:
+                kernel = K.concatenate((self.left_kernel, right_kernel), axis=0)
+            else:
+                raise ValueError('The kernel size should be bigger than one')
         outputs = K.conv1d(inputs,
                            kernel,
                            padding=self.padding,
@@ -117,14 +124,15 @@ class RegToIrrepConv(Layer):
     def call(self, inputs, **kwargs):
         # Build the right part of the kernel from the left one
         # Columns are transposed, the b lines are flipped
-        if self.a_out == 0:
-            right_kernel = -self.left_kernel[::-1, ::-1, self.a_out:]
-        elif self.b_out == 0:
-            right_kernel = self.left_kernel[::-1, ::-1, :self.a_out]
-        else:
-            right_top = self.left_kernel[::-1, ::-1, :self.a_out]
-            right_bottom = -self.left_kernel[::-1, ::-1, self.a_out:]
-            right_kernel = K.concatenate((right_top, right_bottom), axis=2)
+        if self.kernel_size > 1:
+            if self.a_out == 0:
+                right_kernel = -self.left_kernel[::-1, ::-1, self.a_out:]
+            elif self.b_out == 0:
+                right_kernel = self.left_kernel[::-1, ::-1, :self.a_out]
+            else:
+                right_top = self.left_kernel[::-1, ::-1, :self.a_out]
+                right_bottom = -self.left_kernel[::-1, ::-1, self.a_out:]
+                right_kernel = K.concatenate((right_top, right_bottom), axis=2)
 
         # Extra steps are needed for building the middle part when using the odd size
         # We build the missing parts by transposing and flipping the sign of b_parts.
@@ -132,18 +140,27 @@ class RegToIrrepConv(Layer):
             if self.a_out == 0:
                 bottom_left = -self.bottom_right[:, ::-1, :]
                 bottom = K.concatenate((bottom_left, self.bottom_right), axis=1)
-                kernel = K.concatenate((self.left_kernel, bottom, right_kernel), axis=0)
+                if self.kernel_size > 1:
+                    kernel = K.concatenate((self.left_kernel, bottom, right_kernel), axis=0)
+                else:
+                    kernel = bottom
             elif self.b_out == 0:
                 top_right = self.top_left[:, ::-1, :]
                 top = K.concatenate((self.top_left, top_right), axis=1)
-                kernel = K.concatenate((self.left_kernel, top, right_kernel), axis=0)
+                if self.kernel_size > 1:
+                    kernel = K.concatenate((self.left_kernel, top, right_kernel), axis=0)
+                else:
+                    kernel = top
             else:
                 top_right = self.top_left[:, ::-1, :]
                 bottom_left = -self.bottom_right[:, ::-1, :]
                 left = K.concatenate((self.top_left, bottom_left), axis=2)
                 right = K.concatenate((top_right, self.bottom_right), axis=2)
                 center_kernel = K.concatenate((left, right), axis=1)
-                kernel = K.concatenate((self.left_kernel, center_kernel, right_kernel), axis=0)
+                if self.kernel_size > 1:
+                    kernel = K.concatenate((self.left_kernel, center_kernel, right_kernel), axis=0)
+                else:
+                    kernel = center_kernel
         else:
             kernel = K.concatenate((self.left_kernel, right_kernel), axis=0)
         outputs = K.conv1d(inputs,
@@ -189,9 +206,10 @@ class IrrepToRegConv(Layer):
         self.padding = padding
         self.dilatation = dilatation
 
-        self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
-                                           initializer=self.kernel_initializer,
-                                           name='left_kernel')
+        if self.kernel_size > 1:
+            self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
+                                               initializer=self.kernel_initializer,
+                                               name='left_kernel')
 
         # odd size : To get the equality for x=0, we need to have transposed columns + flipped bor the b_in dims
         if self.kernel_size % 2 == 1:
@@ -207,14 +225,15 @@ class IrrepToRegConv(Layer):
     def call(self, inputs, **kwargs):
         # Build the right part of the kernel from the left one
         # Rows are transposed, the b columns are flipped
-        if self.a_in == 0:
-            right_kernel = -self.left_kernel[::-1, self.a_in:, ::-1]
-        elif self.b_in == 0:
-            right_kernel = self.left_kernel[::-1, :self.a_in, ::-1]
-        else:
-            right_left = self.left_kernel[::-1, :self.a_in, ::-1]
-            right_right = -self.left_kernel[::-1, self.a_in:, ::-1]
-            right_kernel = K.concatenate((right_left, right_right), axis=1)
+        if self.kernel_size > 1:
+            if self.a_in == 0:
+                right_kernel = -self.left_kernel[::-1, self.a_in:, ::-1]
+            elif self.b_in == 0:
+                right_kernel = self.left_kernel[::-1, :self.a_in, ::-1]
+            else:
+                right_left = self.left_kernel[::-1, :self.a_in, ::-1]
+                right_right = -self.left_kernel[::-1, self.a_in:, ::-1]
+                right_kernel = K.concatenate((right_left, right_right), axis=1)
 
         # Extra steps are needed for building the middle part when using the odd size
         # We build the missing parts by transposing and flipping the sign of b_parts.
@@ -222,18 +241,27 @@ class IrrepToRegConv(Layer):
             if self.a_in == 0:
                 top_right = -self.bottom_right[:, :, ::-1]
                 right = K.concatenate((top_right, self.bottom_right), axis=2)
-                kernel = K.concatenate((self.left_kernel, right, right_kernel), axis=0)
+                if self.kernel_size > 1:
+                    kernel = K.concatenate((self.left_kernel, right, right_kernel), axis=0)
+                else:
+                    kernel = right
             elif self.b_in == 0:
                 bottom_left = self.top_left[:, :, ::-1]
                 left = K.concatenate((self.top_left, bottom_left), axis=2)
-                kernel = K.concatenate((self.left_kernel, left, right_kernel), axis=0)
+                if self.kernel_size > 1:
+                    kernel = K.concatenate((self.left_kernel, left, right_kernel), axis=0)
+                else:
+                    kernel = left
             else:
                 top_right = -self.bottom_right[:, :, ::-1]
                 bottom_left = self.top_left[:, :, ::-1]
                 left = K.concatenate((self.top_left, bottom_left), axis=2)
                 right = K.concatenate((top_right, self.bottom_right), axis=2)
                 center_kernel = K.concatenate((left, right), axis=1)
-                kernel = K.concatenate((self.left_kernel, center_kernel, right_kernel), axis=0)
+                if self.kernel_size > 1:
+                    kernel = K.concatenate((self.left_kernel, center_kernel, right_kernel), axis=0)
+                else:
+                    kernel = center_kernel
         else:
             kernel = K.concatenate((self.left_kernel, right_kernel), axis=0)
         outputs = K.conv1d(inputs,
@@ -280,9 +308,10 @@ class IrrepToIrrepConv(Layer):
         self.padding = padding
         self.dilatation = dilatation
 
-        self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
-                                           initializer=self.kernel_initializer,
-                                           name='left_kernel')
+        if self.kernel_size > 1:
+            self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
+                                               initializer=self.kernel_initializer,
+                                               name='left_kernel')
         # odd size
         if self.kernel_size % 2 == 1:
             # For the kernel to be anti-symmetric, we need to have zeros on the anti-symmetric parts
@@ -299,71 +328,71 @@ class IrrepToIrrepConv(Layer):
     def call(self, inputs):
         # Build the right part of the kernel from the left one
         # Here being on a 'b' part means flipping so the block diagonal is flipped
+        if self.kernel_size > 1:
+            # going from as ->
+            if self.b_in == 0:
+                # going from as -> bs
+                if self.a_out == 0:
+                    right_kernel = - self.left_kernel[::-1, :, :]
+                # going from as -> as
+                elif self.b_out == 0:
+                    right_kernel = self.left_kernel[::-1, :, :]
+                # going from as -> abs
+                else:
+                    right_top = self.left_kernel[::-1, :, :self.a_out]
+                    right_bottom = - self.left_kernel[::-1, :, self.a_out:]
+                    right_kernel = K.concatenate((right_top, right_bottom), axis=2)
 
-        # going from as ->
-        if self.b_in == 0:
-            # going from as -> bs
-            if self.a_out == 0:
-                right_kernel = - self.left_kernel[::-1, :, :]
-            # going from as -> as
+            # going from bs ->
+            elif self.a_in == 0:
+                # going from bs -> bs
+                if self.a_out == 0:
+                    right_kernel = self.left_kernel[::-1, :, :]
+                # going from bs -> as
+                elif self.b_out == 0:
+                    right_kernel = - self.left_kernel[::-1, :, :]
+                # going from bs -> abs
+                else:
+                    right_top = -self.left_kernel[::-1, :, :self.a_out]
+                    right_bottom = self.left_kernel[::-1, :, self.a_out:]
+                    right_kernel = K.concatenate((right_top, right_bottom), axis=2)
+
+            # going to -> bs
+            elif self.a_out == 0:
+                # going from bs -> bs
+                if self.a_in == 0:
+                    right_kernel = self.left_kernel[::-1, :, :]
+                # going from as -> bs
+                elif self.b_in == 0:
+                    right_kernel = - self.left_kernel[::-1, :, :]
+                # going from abs -> bs
+                else:
+                    right_left = - self.left_kernel[::-1, :self.a_in, :]
+                    right_right = self.left_kernel[::-1, self.a_in:, :]
+                    right_kernel = K.concatenate((right_left, right_right), axis=1)
+
+            # going to -> as
             elif self.b_out == 0:
-                right_kernel = self.left_kernel[::-1, :, :]
-            # going from as -> abs
-            else:
-                right_top = self.left_kernel[::-1, :, :self.a_out]
-                right_bottom = - self.left_kernel[::-1, :, self.a_out:]
-                right_kernel = K.concatenate((right_top, right_bottom), axis=2)
+                # going from bs -> as
+                if self.a_in == 0:
+                    right_kernel = - self.left_kernel[::-1, :, :]
+                # going from as -> as
+                elif self.b_in == 0:
+                    right_kernel = self.left_kernel[::-1, :, :]
+                # going from abs -> as
+                else:
+                    right_left = self.left_kernel[::-1, :self.a_in, :]
+                    right_right = -self.left_kernel[::-1, self.a_in:, :]
+                    right_kernel = K.concatenate((right_left, right_right), axis=1)
 
-        # going from bs ->
-        elif self.a_in == 0:
-            # going from bs -> bs
-            if self.a_out == 0:
-                right_kernel = self.left_kernel[::-1, :, :]
-            # going from bs -> as
-            elif self.b_out == 0:
-                right_kernel = - self.left_kernel[::-1, :, :]
-            # going from bs -> abs
             else:
-                right_top = -self.left_kernel[::-1, :, :self.a_out]
-                right_bottom = self.left_kernel[::-1, :, self.a_out:]
-                right_kernel = K.concatenate((right_top, right_bottom), axis=2)
-
-        # going to -> bs
-        elif self.a_out == 0:
-            # going from bs -> bs
-            if self.a_in == 0:
-                right_kernel = self.left_kernel[::-1, :, :]
-            # going from as -> bs
-            elif self.b_in == 0:
-                right_kernel = - self.left_kernel[::-1, :, :]
-            # going from abs -> bs
-            else:
-                right_left = - self.left_kernel[::-1, :self.a_in, :]
-                right_right = self.left_kernel[::-1, self.a_in:, :]
+                right_top_left = self.left_kernel[::-1, :self.a_in, :self.a_out]
+                right_top_right = -self.left_kernel[::-1, self.a_in:, :self.a_out]
+                right_bottom_left = -self.left_kernel[::-1, :self.a_in, self.a_out:]
+                right_bottom_right = self.left_kernel[::-1, self.a_in:, self.a_out:]
+                right_left = K.concatenate((right_top_left, right_bottom_left), axis=2)
+                right_right = K.concatenate((right_top_right, right_bottom_right), axis=2)
                 right_kernel = K.concatenate((right_left, right_right), axis=1)
-
-        # going to -> as
-        elif self.b_out == 0:
-            # going from bs -> as
-            if self.a_in == 0:
-                right_kernel = - self.left_kernel[::-1, :, :]
-            # going from as -> as
-            elif self.b_in == 0:
-                right_kernel = self.left_kernel[::-1, :, :]
-            # going from abs -> as
-            else:
-                right_left = self.left_kernel[::-1, :self.a_in, :]
-                right_right = -self.left_kernel[::-1, self.a_in:, :]
-                right_kernel = K.concatenate((right_left, right_right), axis=1)
-
-        else:
-            right_top_left = self.left_kernel[::-1, :self.a_in, :self.a_out]
-            right_top_right = -self.left_kernel[::-1, self.a_in:, :self.a_out]
-            right_bottom_left = -self.left_kernel[::-1, :self.a_in, self.a_out:]
-            right_bottom_right = self.left_kernel[::-1, self.a_in:, self.a_out:]
-            right_left = K.concatenate((right_top_left, right_bottom_left), axis=2)
-            right_right = K.concatenate((right_top_right, right_bottom_right), axis=2)
-            right_kernel = K.concatenate((right_left, right_right), axis=1)
 
         # Extra steps are needed for building the middle part when using the odd size
         if self.kernel_size % 2 == 1:
@@ -433,8 +462,10 @@ class IrrepToIrrepConv(Layer):
                 left = K.concatenate((self.top_left, bottom_left), axis=2)
                 right = K.concatenate((top_right, self.bottom_right), axis=2)
                 center_kernel = K.concatenate((left, right), axis=1)
-            kernel = K.concatenate((self.left_kernel, center_kernel, right_kernel), axis=0)
-
+            if self.kernel_size > 1:
+                kernel = K.concatenate((self.left_kernel, center_kernel, right_kernel), axis=0)
+            else:
+                kernel = center_kernel
         else:
             kernel = K.concatenate((self.left_kernel, right_kernel), axis=0)
 
@@ -935,16 +966,13 @@ class EquiNetBP(Layer):
                                  reg_out=1,
                                  kernel_size=1,
                                  kernel_initializer=self.kernel_initializer,
-                                 padding='valid',
-                                 name=profileouttaskname)
+                                 padding='valid')
 
-        # self.densecounts = kl.Dense(2, name=countouttaskname)
         self.last_count = IrrepToRegConv(a_in=self.last_a + 2,
                                          b_in=self.last_b,
                                          reg_out=1,
                                          kernel_size=1,
-                                         kernel_initializer=self.kernel_initializer,
-                                         name=countouttaskname)
+                                         kernel_initializer=self.kernel_initializer)
 
     def get_output_profile_len(self):
         embedding_len = self.input_seq_len
@@ -971,7 +999,7 @@ class EquiNetBP(Layer):
         else:
             bias_counts_input = kl.Input(shape=(2,), name="patchcap.logcount")
             # if working with raw counts, go from logcount->count
-            bias_profile_input = kl.Input(shape=(out_pred_len, 2),
+            bias_profile_input = kl.Input(shape=(1000, 2),
                                           name="patchcap.profile")
         return inp, bias_counts_input, bias_profile_input
 
@@ -1026,34 +1054,38 @@ class EquiNetBP(Layer):
 
         combined_conv = prev_layers
 
-        # ============== Placeholder for counts =================
-        # count_out = bias_counts_input
+        countouttaskname, profileouttaskname = self.get_names()
 
-        gap_combined_conv = kl.GlobalAvgPool1D()(combined_conv)
-        stacked = kl.Reshape((1, -1))(kl.concatenate([
-            # concatenation of the bias layer both before and after
-            # is needed for rc symmetry
-            kl.Lambda(lambda x: x[:, ::-1])(bias_counts_input),
-            gap_combined_conv,
-            bias_counts_input], axis=-1))
-        convout = self.last_count(stacked)
-        count_out = kl.Reshape((-1,))(convout)
+        # ============== Placeholder for counts =================
+        count_out = kl.Lambda(lambda x: x, name=countouttaskname)(bias_counts_input)
+
+        # gap_combined_conv = kl.GlobalAvgPool1D()(combined_conv)
+        # stacked = kl.Reshape((1, -1))(kl.concatenate([
+        #     # concatenation of the bias layer both before and after
+        #     # is needed for rc symmetry
+        #     kl.Lambda(lambda x: x[:, ::-1])(bias_counts_input),
+        #     gap_combined_conv,
+        #     bias_counts_input], axis=-1))
+        # convout = self.last_count(stacked)
+        # count_out = kl.Reshape((-1,), name=countouttaskname)(convout)
 
         # ============== Profile prediction ======================
         profile_out_prebias = self.prebias(combined_conv)
-        # concatenation of the bias layer both before and after is needed for rc symmetry
+
+        # # concatenation of the bias layer both before and after is needed for rc symmetry
         concatenated = kl.concatenate([kl.Lambda(lambda x: x[:, :, ::-1])(bias_profile_input),
                                        profile_out_prebias,
                                        bias_profile_input], axis=-1)
         profile_out = self.last(concatenated)
+        profile_out = kl.Lambda(lambda x: x, name=profileouttaskname)(profile_out)
 
         model = keras.models.Model(
             inputs=[sequence_input, bias_counts_input, bias_profile_input],
             outputs=[count_out, profile_out])
-
         model.compile(keras.optimizers.Adam(lr=self.lr),
                       loss=['mse', MultichannelMultinomialNLL(2)],
                       loss_weights=[self.c_task_weight, self.p_task_weight])
+        # print(model.summary())
         return model
 
     def eager_call(self, sequence_input, bias_counts_input, bias_profile_input):
@@ -1301,23 +1333,23 @@ if __name__ == '__main__':
         def __getitem__(self, item):
             if self.eager:
                 inputs_1 = tf.random.uniform(shape=(self.bs, self.inlen, self.infeat))
-                inputs_2 = tf.random.uniform(shape=(self.bs, self.outfeat))
-                inputs_3 = tf.random.uniform(shape=(self.bs, self.outlen, self.outfeat))
+                inputs_2 = tf.random.uniform(shape=(self.bs, 2))
+                inputs_3 = tf.random.uniform(shape=(self.bs, self.outlen, 2))
                 inputs = {'sequence': inputs_1,
                           'patchcap.logcount': inputs_2,
                           'patchcap.profile': inputs_3}
-                targets_1 = tf.random.uniform(shape=(self.bs, self.outfeat))
+                targets_1 = tf.random.uniform(shape=(self.bs, 2))
                 targets_2 = tf.random.uniform(shape=(self.bs, self.outlen, self.outfeat))
                 targets = {'CHIPNexus.SOX2.logcount': targets_1,
                            'CHIPNexus.SOX2.profile': targets_2}
             else:
                 inputs_1 = np.random.uniform(size=(self.bs, self.inlen, self.infeat))
-                inputs_2 = np.random.uniform(size=(self.bs, self.outfeat))
-                inputs_3 = np.random.uniform(size=(self.bs, self.outlen, self.outfeat))
+                inputs_2 = np.random.uniform(size=(self.bs, 2))
+                inputs_3 = np.random.uniform(size=(self.bs, self.outlen, 2))
                 inputs = {'sequence': inputs_1,
                           'patchcap.logcount': inputs_2,
                           'patchcap.profile': inputs_3}
-                targets_1 = np.random.uniform(size=(self.bs, self.outfeat))
+                targets_1 = np.random.uniform(size=(self.bs, 2))
                 targets_2 = np.random.uniform(size=(self.bs, self.outlen, self.outfeat))
                 targets = {'CHIPNexus.SOX2.logcount': targets_1,
                            'CHIPNexus.SOX2.profile': targets_2}
@@ -1451,6 +1483,7 @@ if __name__ == '__main__':
         rc_model = EquiNetBP(dataset='SOX2').get_keras_model()
         # print(rc_model.summary())
         generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager)
+
         rc_model.fit_generator(generator)
 
     if eager:
@@ -1490,7 +1523,7 @@ if __name__ == '__main__':
         # print('reversed')
         # print(out2.numpy()[::-1])
 
-        generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager, bs=2)
+        generator = BPNGenerator(inlen=1346, outfeat=128, outlen=1000, eager=eager, bs=2)
         # inputs = next(iter(generator))
         # a, b, c = inputs[0].values()
         rc_model = EquiNetBP(dataset='SOX2')

@@ -1,4 +1,5 @@
 #First install tf and keras
+conda create --name rcps python=3.7
 conda install tensorflow-gpu=1.14
 conda install keras=2.2.4
 
