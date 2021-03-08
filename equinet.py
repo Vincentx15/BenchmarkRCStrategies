@@ -73,7 +73,12 @@ class RegToRegConv(Layer):
 
     def get_config(self):
         config = {'reg_in': self.reg_in,
-                  'reg_out': self.reg_out}
+                  'reg_out': self.reg_out,
+                  'kernel_size': self.kernel_size,
+                  'dilatation': self.dilatation,
+                  'padding': self.padding,
+                  'kernel_initializer': self.kernel_initializer,
+                  }
         base_config = super(RegToRegConv, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
@@ -93,8 +98,9 @@ class RegToIrrepConv(Layer):
     def __init__(self, reg_in, a_out, b_out, kernel_size,
                  dilatation=1,
                  padding='valid',
-                 kernel_initializer='glorot_uniform'):
-        super(RegToIrrepConv, self).__init__()
+                 kernel_initializer='glorot_uniform',
+                 **kwargs):
+        super(RegToIrrepConv, self).__init__(**kwargs)
         self.reg_in = reg_in
         self.a_out = a_out
         self.b_out = b_out
@@ -172,7 +178,12 @@ class RegToIrrepConv(Layer):
     def get_config(self):
         config = {'reg_in': self.reg_in,
                   'a_out': self.a_out,
-                  'b_out': self.b_out}
+                  'b_out': self.b_out,
+                  'kernel_size': self.kernel_size,
+                  'dilatation': self.dilatation,
+                  'padding': self.padding,
+                  'kernel_initializer': self.kernel_initializer,
+                  }
         base_config = super(RegToIrrepConv, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
@@ -273,7 +284,12 @@ class IrrepToRegConv(Layer):
     def get_config(self):
         config = {'reg_out': self.reg_out,
                   'a_in': self.a_in,
-                  'b_in': self.b_in}
+                  'b_in': self.b_in,
+                  'kernel_size': self.kernel_size,
+                  'dilatation': self.dilatation,
+                  'padding': self.padding,
+                  'kernel_initializer': self.kernel_initializer,
+                  }
         base_config = super(IrrepToRegConv, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
@@ -293,8 +309,9 @@ class IrrepToIrrepConv(Layer):
     def __init__(self, a_in, a_out, b_in, b_out, kernel_size,
                  dilatation=1,
                  padding='valid',
-                 kernel_initializer='glorot_uniform'):
-        super(IrrepToIrrepConv, self).__init__()
+                 kernel_initializer='glorot_uniform',
+                 **kwargs):
+        super(IrrepToIrrepConv, self).__init__(**kwargs)
 
         self.a_in = a_in
         self.b_in = b_in
@@ -479,7 +496,12 @@ class IrrepToIrrepConv(Layer):
         config = {'a_in': self.a_in,
                   'a_out': self.a_out,
                   'b_in': self.b_in,
-                  'b_out': self.b_out}
+                  'b_out': self.b_out,
+                  'kernel_size': self.kernel_size,
+                  'dilatation': self.dilatation,
+                  'padding': self.padding,
+                  'kernel_initializer': self.kernel_initializer,
+                  }
         base_config = super(IrrepToIrrepConv, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
@@ -518,14 +540,22 @@ class IrrepActivationLayer(Layer):
                 return b_outputs
         return a_outputs
 
+    def get_config(self):
+        config = {'a': self.a,
+                  'b': self.b,
+                  'placeholder': self.placeholder,
+                  }
+        base_config = super(IrrepActivationLayer, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
 
 class RegBatchNorm(Layer):
     """
     BN layer for regular layers
     """
 
-    def __init__(self, reg_dim, placeholder=False):
-        super(RegBatchNorm, self).__init__()
+    def __init__(self, reg_dim, placeholder=False, **kwargs):
+        super(RegBatchNorm, self).__init__(**kwargs)
         self.reg_dim = reg_dim
         self.placeholder = placeholder
 
@@ -584,14 +614,21 @@ class RegBatchNorm(Layer):
     def compute_output_shape(self, input_shape):
         return (input_shape[0], input_shape[1], input_shape[2])
 
+    def get_config(self):
+        config = {'reg_dim': self.reg_dim,
+                  'placeholder': self.placeholder,
+                  }
+        base_config = super(RegBatchNorm, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
 
 class IrrepBatchNorm(Layer):
     """
     BN layer for a_n, b_n feature map
     """
 
-    def __init__(self, a, b, placeholder=False):
-        super(IrrepBatchNorm, self).__init__()
+    def __init__(self, a, b, placeholder=False, **kwargs):
+        super(IrrepBatchNorm, self).__init__(**kwargs)
         self.a = a
         self.b = b
         self.placeholder = placeholder
@@ -673,8 +710,8 @@ class IrrepConcatLayer(Layer):
     Concatenation layer to average both strands outputs
     """
 
-    def __init__(self, a, b):
-        super(IrrepConcatLayer, self).__init__()
+    def __init__(self, a, b, **kwargs):
+        super(IrrepConcatLayer, self).__init__(**kwargs)
         self.a = a
         self.b = b
 
@@ -689,6 +726,13 @@ class IrrepConcatLayer(Layer):
             else:
                 return b_outputs
         return a_outputs
+
+    def get_config(self):
+        config = {'a': self.a,
+                  'b': self.b,
+                  }
+        base_config = super(IrrepConcatLayer, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
 class RegConcatLayer(Layer):
@@ -709,6 +753,12 @@ class RegConcatLayer(Layer):
 
     def compute_output_shape(self, input_shape):
         return (input_shape[0], input_shape[1], int(input_shape[2] / 2))
+
+    def get_config(self):
+        config = {'reg': self.reg,
+                  }
+        base_config = super(RegConcatLayer, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
 class EquiNetBinary:
