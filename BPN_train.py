@@ -177,7 +177,7 @@ def train_model(PARAMETERS, inputs_coordstovals, targets_coordstovals, epochs_to
         patience=10, restore_best_weights=True)
 
     model_history = History()
-    model.fit_generator(val_batch_generator,
+    model.fit_generator(train_batch_generator,
                         epochs=epochs_to_train_for,
                         validation_data=val_batch_generator,
                         callbacks=[early_stopping_callback, model_history],
