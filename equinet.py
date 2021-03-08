@@ -518,8 +518,8 @@ class IrrepActivationLayer(Layer):
     BN layer for a_n, b_n feature map
     """
 
-    def __init__(self, a, b, placeholder=False):
-        super(IrrepActivationLayer, self).__init__()
+    def __init__(self, a, b, placeholder=False, **kwargs):
+        super(IrrepActivationLayer, self).__init__(**kwargs)
         self.a = a
         self.b = b
         self.placeholder = placeholder
@@ -740,8 +740,8 @@ class RegConcatLayer(Layer):
     Concatenation layer to average both strands outputs
     """
 
-    def __init__(self, reg):
-        super(RegConcatLayer, self).__init__()
+    def __init__(self, reg,**kwargs):
+        super(RegConcatLayer, self).__init__(**kwargs)
         self.reg = reg
 
     def call(self, inputs):
@@ -923,8 +923,9 @@ def multinomial_nll(true_counts, logits):
 
 # from https://github.com/kundajelab/basepair/blob/cda0875571066343cdf90aed031f7c51714d991a/basepair/losses.py#L87
 class MultichannelMultinomialNLL(object):
-    def __init__(self, n):
+    def __init__(self, n=2):
         self.__name__ = "MultichannelMultinomialNLL"
+        self.__class_name__ = "MultichannelMultinomialNLL"
         self.n = n
 
     def __call__(self, true_counts, logits):

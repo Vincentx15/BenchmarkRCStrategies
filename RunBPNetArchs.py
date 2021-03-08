@@ -16,6 +16,14 @@ from seqdataloader.batchproducers.coordbased.coordbatchtransformers import Abstr
 from seqdataloader.batchproducers.coordbased.coordbatchtransformers import get_revcomp
 import numpy as np
 
+import tensorflow as tf
+import keras
+from keras import backend as K
+import keras.layers as kl
+from keras.engine import Layer
+from keras.engine.base_layer import InputSpec
+from keras.callbacks import History
+
 import os
 
 
@@ -48,160 +56,75 @@ def get_inputs_and_targets(dataset, seq_len, out_pred_len):
     return inputs_coordstovals, targets_coordstovals
 
 
-class RevcompTackedOnSimpleCoordsBatchProducer(SimpleCoordsBatchProducer):
-    def _get_coordslist(self):
-        return [x for x in self.bed_file.coords_list] + [get_revcomp(x) for x in self.bed_file.coords_list]
-
-
-def get_specific_generator(PARAMETERS, inputs_coordstovals, targets_coordstovals, model_arch, curr_seed):
-    train_file = f"data/{PARAMETERS['dataset']}/bpnet_{PARAMETERS['dataset']}_train_1k_around_summits.bed.gz"
-    valid_file = f"data/{PARAMETERS['dataset']}/bpnet_{PARAMETERS['dataset']}_valid_1k_around_summits.bed.gz"
-    chromsizes_file = "data/mm10.chrom.sizes"
-
-    if model_arch == "reg" or model_arch == "RevComp" or model_arch == "siamese" or model_arch == "RevComp_half":
-        train_batch_generator = KerasBatchGenerator(
-            coordsbatch_producer=coordbatchproducers.SimpleCoordsBatchProducer(
-                bed_file=train_file,
-                batch_size=64,
-                shuffle_before_epoch=True,
-                seed=curr_seed),
-            inputs_coordstovals=inputs_coordstovals,
-            targets_coordstovals=targets_coordstovals,
-            coordsbatch_transformer=coordbatchtransformers.UniformJitter(
-                maxshift=200,
-                chromsizes_file=chromsizes_file))
-    elif model_arch == "aug":
-        train_batch_generator = KerasBatchGenerator(
-            coordsbatch_producer=coordbatchproducers.SimpleCoordsBatchProducer(
-                bed_file=train_file,
-                batch_size=64,
-                shuffle_before_epoch=True,
-                seed=curr_seed),
-            inputs_coordstovals=inputs_coordstovals,
-            targets_coordstovals=targets_coordstovals,
-            coordsbatch_transformer=coordbatchtransformers.ReverseComplementAugmenter().chain(
-                coordbatchtransformers.UniformJitter(
-                    maxshift=200, chromsizes_file=chromsizes_file)))
-    elif model_arch == "aug_alt":
-        train_batch_generator = KerasBatchGenerator(
-            coordsbatch_producer=RevcompTackedOnSimpleCoordsBatchProducer(
-                bed_file=train_file,
-                batch_size=64,
-                shuffle_before_epoch=True,
-                seed=curr_seed),
-            inputs_coordstovals=inputs_coordstovals,
-            targets_coordstovals=targets_coordstovals,
-            coordsbatch_transformer=coordbatchtransformers.UniformJitter(
-                maxshift=200, chromsizes_file=chromsizes_file))
-    elif model_arch == "aug_alt_double":
-        train_batch_generator = KerasBatchGenerator(
-            coordsbatch_producer=RevcompTackedOnSimpleCoordsBatchProducer(
-                bed_file=train_file,
-                batch_size=132,
-                shuffle_before_epoch=True,
-                seed=curr_seed),
-            inputs_coordstovals=inputs_coordstovals,
-            targets_coordstovals=targets_coordstovals,
-            coordsbatch_transformer=coordbatchtransformers.UniformJitter(
-                maxshift=200, chromsizes_file=chromsizes_file))
-    val_batch_generator = KerasBatchGenerator(
-        coordsbatch_producer=coordbatchproducers.SimpleCoordsBatchProducer(
-            bed_file=valid_file,
-            batch_size=64,
-            shuffle_before_epoch=False,
-            seed=curr_seed),
-        inputs_coordstovals=inputs_coordstovals,
-        targets_coordstovals=targets_coordstovals
-    )
-    return train_batch_generator, val_batch_generator
-
-
-# def get_generators(PARAMETERS, inputs_coordstovals, targets_coordstovals, curr_seed):
-#     train_file = "bpnet_%s_train_1k_around_summits.bed.gz" % PARAMETERS['dataset']
-#     valid_file = "bpnet_%s_valid_1k_around_summits.bed.gz" % PARAMETERS['dataset']
-#     test_file = "bpnet_%s_test_1k_around_summits.bed.gz" % PARAMETERS['dataset']
-#     chromsizes_file = "data/mm10.chrom.sizes"
-#
-#     standard_train_batch_generator = KerasBatchGenerator(
-#         coordsbatch_producer=coordbatchproducers.SimpleCoordsBatchProducer(
-#             bed_file=train_file,
-#             batch_size=64,
-#             shuffle_before_epoch=True,
-#             seed=curr_seed),
-#         inputs_coordstovals=inputs_coordstovals,
-#         targets_coordstovals=targets_coordstovals,
-#         coordsbatch_transformer=coordbatchtransformers.UniformJitter(
-#             maxshift=200, chromsizes_file=chromsizes_file))
-#
-#     aug_train_batch_generator = KerasBatchGenerator(
-#         coordsbatch_producer=coordbatchproducers.SimpleCoordsBatchProducer(
-#             bed_file=train_file,
-#             batch_size=64,
-#             shuffle_before_epoch=True,
-#             seed=curr_seed),
-#         inputs_coordstovals=inputs_coordstovals,
-#         targets_coordstovals=targets_coordstovals,
-#         coordsbatch_transformer=coordbatchtransformers.ReverseComplementAugmenter().chain(
-#             coordbatchtransformers.UniformJitter(
-#                 maxshift=200, chromsizes_file=chromsizes_file)))
-#
-#     aug_tacked_on_train_batch_generator = KerasBatchGenerator(
-#         coordsbatch_producer=RevcompTackedOnSimpleCoordsBatchProducer(
-#             bed_file=train_file,
-#             batch_size=64,
-#             shuffle_before_epoch=True,
-#             seed=curr_seed),
-#         inputs_coordstovals=inputs_coordstovals,
-#         targets_coordstovals=targets_coordstovals,
-#         coordsbatch_transformer=coordbatchtransformers.UniformJitter(
-#             maxshift=200, chromsizes_file=chromsizes_file))
-#
-#     aug_tacked_on_double_train_batch_generator = KerasBatchGenerator(
-#         coordsbatch_producer=RevcompTackedOnSimpleCoordsBatchProducer(
-#             bed_file=train_file,
-#             batch_size=132,
-#             shuffle_before_epoch=True,
-#             seed=curr_seed),
-#         inputs_coordstovals=inputs_coordstovals,
-#         targets_coordstovals=targets_coordstovals,
-#         coordsbatch_transformer=coordbatchtransformers.UniformJitter(
-#             maxshift=200, chromsizes_file=chromsizes_file))
-#
-#     val_batch_generator = KerasBatchGenerator(
-#         coordsbatch_producer=coordbatchproducers.SimpleCoordsBatchProducer(
-#             bed_file=valid_file,
-#             batch_size=64,
-#             shuffle_before_epoch=False,
-#             seed=curr_seed),
-#         inputs_coordstovals=inputs_coordstovals,
-#         targets_coordstovals=targets_coordstovals
-#     )
-#
-#     train_batch_generators = {
-#         'standard': standard_train_batch_generator,
-#         'aug': aug_train_batch_generator,
-#         'aug_alt': aug_tacked_on_train_batch_generator,
-#         'aug_alt_double': aug_tacked_on_double_train_batch_generator,
-#     }
-#
-#     return train_batch_generators, val_batch_generator
-
-
 class GeneralReverseComplement(AbstractCoordBatchTransformer):
     def __call__(self, coords):
         return [get_revcomp(x) for x in coords]
 
 
-def get_test_generator(dataset, inputs_coordstovals, targets_coordstovals, curr_seed):
-    test_file = f"data/{dataset}/bpnet_dataset_test_1k_around_summits.bed.gz"
-    # chromsizes_file = "data/mm10.chrom.sizes"
+class RevcompTackedOnSimpleCoordsBatchProducer(SimpleCoordsBatchProducer):
+    def _get_coordslist(self):
+        return [x for x in self.bed_file.coords_list] + [get_revcomp(x) for x in self.bed_file.coords_list]
+
+
+def get_train_generator(PARAMETERS, inputs_coordstovals, targets_coordstovals, model_arch):
+    dataset = PARAMETERS['dataset']
+    train_file = os.path.join('data', dataset, f"bpnet_{dataset}_train_1k_around_summits.bed.gz")
+    chromsizes_file = os.path.join('data', "mm10.chrom.sizes")
+
+    if model_arch == "Standard-RCAug":
+        train_batch_generator = KerasBatchGenerator(
+            coordsbatch_producer=coordbatchproducers.SimpleCoordsBatchProducer(
+                bed_file=train_file,
+                batch_size=64,
+                shuffle_before_epoch=True,
+                seed=PARAMETERS['seed']),
+            inputs_coordstovals=inputs_coordstovals,
+            targets_coordstovals=targets_coordstovals,
+            coordsbatch_transformer=coordbatchtransformers.ReverseComplementAugmenter().chain(
+                coordbatchtransformers.UniformJitter(
+                    maxshift=200, chromsizes_file=chromsizes_file)))
+    else:
+        train_batch_generator = KerasBatchGenerator(
+            coordsbatch_producer=coordbatchproducers.SimpleCoordsBatchProducer(
+                bed_file=train_file,
+                batch_size=64,
+                shuffle_before_epoch=True,
+                seed=PARAMETERS['seed']),
+            inputs_coordstovals=inputs_coordstovals,
+            targets_coordstovals=targets_coordstovals,
+            coordsbatch_transformer=coordbatchtransformers.UniformJitter(
+                maxshift=200, chromsizes_file=chromsizes_file))
+
+    return train_batch_generator
+
+
+def get_val_generator(PARAMETERS, inputs_coordstovals, targets_coordstovals):
+    dataset = PARAMETERS['dataset']
+    valid_file = os.path.join('data', dataset, f"bpnet_{dataset}_valid_1k_around_summits.bed.gz")
+    chromsizes_file = os.path.join('data', "mm10.chrom.sizes")
+    val_batch_generator = KerasBatchGenerator(
+        coordsbatch_producer=coordbatchproducers.SimpleCoordsBatchProducer(
+            bed_file=valid_file,
+            batch_size=64,
+            shuffle_before_epoch=False,
+            seed=PARAMETERS['seed']),
+        inputs_coordstovals=inputs_coordstovals,
+        targets_coordstovals=targets_coordstovals)
+
+    return val_batch_generator
+
+
+def get_test_generator(PARAMETERS, inputs_coordstovals, targets_coordstovals):
+    dataset=PARAMETERS['dataset']
+    train_file = os.path.join('data',dataset, f"bpnet_{dataset}_test_1k_around_summits.bed.gz")
+    chromsizes_file = os.path.join('data',"mm10.chrom.sizes")
 
     keras_test_batch_generator = KerasBatchGenerator(
         coordsbatch_producer=coordbatchproducers.SimpleCoordsBatchProducer(
             bed_file=test_file,
             batch_size=64,
             shuffle_before_epoch=False,
-            seed=curr_seed),
+            seed=PARAMETERS['seed']),
         inputs_coordstovals=inputs_coordstovals,
         targets_coordstovals=targets_coordstovals)
 
@@ -210,7 +133,7 @@ def get_test_generator(dataset, inputs_coordstovals, targets_coordstovals, curr_
             bed_file=test_file,
             batch_size=64,
             shuffle_before_epoch=False,
-            seed=curr_seed),
+            seed=PARAMETERS['seed']),
         inputs_coordstovals=inputs_coordstovals,
         targets_coordstovals=targets_coordstovals,
         coordsbatch_transformer=GeneralReverseComplement())
@@ -218,34 +141,77 @@ def get_test_generator(dataset, inputs_coordstovals, targets_coordstovals, curr_
     return keras_test_batch_generator, keras_rc_test_batch_generator
 
 
-def save_all(PARAMETERS, model, model_arch, model_history):
-    if PARAMETERS["c_task_weight"] != 0 and PARAMETERS["p_task_weight"] != 0:
-        task_weight = "both_non_zero_"
-    elif PARAMETERS["c_task_weight"] != 0:
-        task_weight = "c_non_zero_"
-    else:
-        task_weight = ""
-
-    os.chdir("data/%s/new_results/%s" % (PARAMETERS['dataset'], str(PARAMETERS['seed'])))
-
-    txt_file_name = ("%s_TrainProfileModel%s_%s%s_loss_add_profile_only.txt" %
-                     (str(PARAMETERS['seed']), PARAMETERS['dataset'],
-                      task_weight, model_arch))
-
+def save_results(PARAMETERS, model, model_arch, model_history):
+    txt_file_name = ("%s.txt" % (model_arch))
     loss_file = open(txt_file_name, "w")
     loss_file.write("model parameters" + "\n")
     for x in PARAMETERS:
         loss_file.write(str(x) + ": " + str(PARAMETERS[x]) + "\n")
+
     loss_file.write("val_loss\n")
     for row in model_history.history["val_loss"]:
         loss_file.write(str(row) + "\n")
     loss_file.write("min val loss: " + str(np.min(model_history.history["val_loss"])))
 
     loss_file.close()
-
-    model_save_name = ("%s_TrainProfileModel%s_%s%s_add_profile_only.h5" %
-                       (str(PARAMETERS['seed']), PARAMETERS['dataset'],
-                        task_weight, model_arch))
+    if PARAMETERS['filters'] == 32:
+        model_save_name = ("%s-half.h5" % (model_arch))
+    else:
+        model_save_name = ("%s.h5" % (model_arch))
 
     model.save(model_save_name)
-    os.chdir("/home/hannah")
+
+
+def train_model(PARAMETERS, inputs_coordstovals, targets_coordstovals, epochs_to_train_for, model, model_arch):
+    train_batch_generator = get_train_generator(PARAMETERS, inputs_coordstovals, targets_coordstovals, model_arch)
+    val_batch_generator = get_val_generator(PARAMETERS, inputs_coordstovals, targets_coordstovals)
+
+    early_stopping_callback = keras.callbacks.EarlyStopping(
+        patience=10, restore_best_weights=True)
+
+    model_history = History()
+    model.fit_generator(train_batch_generator,
+                        epochs=epochs_to_train_for,
+                        validation_data=val_batch_generator,
+                        callbacks=[early_stopping_callback, model_history])
+    model.set_weights(early_stopping_callback.best_weights)
+    save_results(PARAMETERS, model, model_arch, model_history)
+
+
+PARAMETERS = {
+    'dataset': 'SOX2',
+    'input_seq_len': 1346,
+    'c_task_weight': 0,
+    'p_task_weight': 1,
+    'filters': 64,
+    'n_dil_layers': 6,
+    'conv1_kernel_size': 21,
+    'dil_kernel_size': 3,
+    'outconv_kernel_size': 75,
+    'optimizer': 'Adam',
+    'weight_decay': 0.01,
+    'lr': 0.001,
+    'kernel_initializer': "glorot_uniform",
+    'seed': 42
+}
+out_pred_len = 1000
+epochs_to_train_for = 200
+
+seed = 42
+np.random.seed(seed)
+
+tf.set_random_seed(seed)
+
+inputs_coordstovals, targets_coordstovals = get_inputs_and_targets(dataset=PARAMETERS['dataset'],
+                                                                   seq_len=PARAMETERS['input_seq_len'],
+                                                                   out_pred_len=out_pred_len)
+
+batch_generator, keras_rc_test_batch_generator = get_test_generator(PARAMETERS=PARAMETERS,
+                                                                    inputs_coordstovals=inputs_coordstovals,
+                                                                    targets_coordstovals=targets_coordstovals)
+
+from BPNetArchs import RcBPNetArch
+from equinet import EquiNetBP
+
+rcps_model = RcBPNetArch(is_add=True, **PARAMETERS).get_keras_model()
+equinet_model = EquiNetBP(dataset=PARAMETERS['dataset'])
