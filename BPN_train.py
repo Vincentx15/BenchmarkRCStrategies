@@ -21,7 +21,6 @@ from seqdataloader.batchproducers.coordbased.coordbatchtransformers import get_r
 
 from keras_genomics.layers.convolutional import RevCompConv1D
 
-
 # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
@@ -184,10 +183,11 @@ def train_model(PARAMETERS, inputs_coordstovals, targets_coordstovals, epochs_to
                         )
     model.set_weights(early_stopping_callback.best_weights)
     save_results(PARAMETERS, model, model_arch, model_history)
+    return model
 
 
 PARAMETERS = {
-    'dataset': 'SOX2',
+    'dataset': 'OCT4',
     'input_seq_len': 1346,
     'c_task_weight': 0,
     'p_task_weight': 1,
@@ -204,6 +204,8 @@ PARAMETERS = {
     'seed': 1234
 }
 
+MODEL_NAME = 'equinet_oct4'
+
 seq_len = 1346
 out_pred_len = 1000
 curr_seed = PARAMETERS['seed']
@@ -219,19 +221,21 @@ tf.set_random_seed(curr_seed)
 
 rcps_model = RcBPNetArch(is_add=True, **PARAMETERS).get_keras_model()
 equinet_model = EquiNetBP(dataset=PARAMETERS['dataset']).get_keras_model()
-train_model(PARAMETERS=PARAMETERS,
-            inputs_coordstovals=inputs_coordstovals,
-            targets_coordstovals=targets_coordstovals,
-            epochs_to_train_for=epochs_to_train_for,
-            model=rcps_model,
-            model_arch='RCPS')
 
-train_model(PARAMETERS=PARAMETERS,
-            inputs_coordstovals=inputs_coordstovals,
-            targets_coordstovals=targets_coordstovals,
-            epochs_to_train_for=epochs_to_train_for,
-            model=equinet_model,
-            model_arch='Equimodel')
+
+# train_model(PARAMETERS=PARAMETERS,
+#             inputs_coordstovals=inputs_coordstovals,
+#             targets_coordstovals=targets_coordstovals,
+#             epochs_to_train_for=epochs_to_train_for,
+#             model=rcps_model,
+#             model_arch='RCPS')
+#
+# train_model(PARAMETERS=PARAMETERS,
+#             inputs_coordstovals=inputs_coordstovals,
+#             targets_coordstovals=targets_coordstovals,
+#             epochs_to_train_for=epochs_to_train_for,
+#             model=equinet_model,
+#             model_arch='Equimodel')
 
 
 # ========== Now we have trained models, let us compute profile metrics values for these models ===============
@@ -495,22 +499,12 @@ def get_test_values(model, batch_generator):
     mse = np.average(mse),
     return jsd, pears, spear, mse
 
+
 from keras.utils import CustomObjectScope
 from keras.models import load_model
 import keras.losses
+
 keras.losses.MultichannelMultinomialNLL = MultichannelMultinomialNLL
-
-batch_generator, keras_rc_test_batch_generator = get_test_generator(
-    PARAMETERS=PARAMETERS, inputs_coordstovals=inputs_coordstovals, targets_coordstovals=targets_coordstovals)
-
-with CustomObjectScope({'MultichannelMultinomialNLL': MultichannelMultinomialNLL,
-                        'RevCompConv1D': RevCompConv1D}):
-    rcps_model = load_model('RCPS.h5')
-
-    jsd, pears, spear, mse = get_test_values(rcps_model, batch_generator)
-    print('RCPS performance : ', jsd, pears, spear, mse)
-
-
 
 equilayers = {'RegToRegConv': RegToRegConv,
               'RegToIrrepConv': RegToIrrepConv,
@@ -522,8 +516,37 @@ equilayers = {'RegToRegConv': RegToRegConv,
               'IrrepConcatLayer': IrrepConcatLayer,
               'RegConcatLayer': RegConcatLayer,
               'loss': MultichannelMultinomialNLL,
-              }
+              'MultichannelMultinomialNLL': MultichannelMultinomialNLL,
+              'RevCompConv1D': RevCompConv1D}
 
-equi_model = load_model('Equimodel.h5', custom_objects=equilayers)
-jsd, pears, spear, mse = get_test_values(equi_model, batch_generator)
-print('Equinet performance : ', jsd, pears, spear, mse)
+
+def test_saved_model(model_name, custom_objects=equilayers):
+    model = load_model(model_name, custom_objects=equilayers)
+
+    batch_generator, keras_rc_test_batch_generator = get_test_generator(
+        PARAMETERS=PARAMETERS, inputs_coordstovals=inputs_coordstovals, targets_coordstovals=targets_coordstovals)
+
+    jsd, pears, spear, mse = get_test_values(model, batch_generator)
+    print(f'{model_name} performance : ', jsd, pears, spear, mse)
+    return jsd, pears, spear, mse
+
+
+# test_saved_model('Equimodel')
+
+def train_test_model(model, model_name='default'):
+    model = train_model(PARAMETERS=PARAMETERS,
+                        inputs_coordstovals=inputs_coordstovals,
+                        targets_coordstovals=targets_coordstovals,
+                        epochs_to_train_for=epochs_to_train_for,
+                        model=model,
+                        model_arch=model_name)
+
+    batch_generator, keras_rc_test_batch_generator = get_test_generator(
+        PARAMETERS=PARAMETERS, inputs_coordstovals=inputs_coordstovals, targets_coordstovals=targets_coordstovals)
+
+    jsd, pears, spear, mse = get_test_values(model, batch_generator)
+    print(f'{model_name} performance : ', jsd, pears, spear, mse)
+    return jsd, pears, spear, mse
+
+train_test_model(equinet_model, model_name=MODEL_NAME)
+
