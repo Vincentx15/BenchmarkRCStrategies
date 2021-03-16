@@ -22,8 +22,8 @@ from seqdataloader.batchproducers.coordbased.coordbatchtransformers import get_r
 from keras_genomics.layers.convolutional import RevCompConv1D
 
 
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 from BPNetArchs import RcBPNetArch
 from equinet import *
