@@ -1,15 +1,10 @@
 import os
 import tensorflow as tf
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-tf.get_logger().setLevel('INFO')
-
 import keras
 from keras import backend as K
 from keras.layers import Layer
 import keras.layers as kl
-import keras.activations as ka
-
 import numpy as np
 
 
@@ -342,7 +337,7 @@ class IrrepToIrrepConv(Layer):
                                                     initializer=self.kernel_initializer,
                                                     name='center_kernel_br')
 
-    def call(self, inputs):
+    def call(self, inputs, **kwargs):
         # Build the right part of the kernel from the left one
         # Here being on a 'b' part means flipping so the block diagonal is flipped
         if self.kernel_size > 1:
@@ -524,7 +519,7 @@ class IrrepActivationLayer(Layer):
         self.b = b
         self.placeholder = placeholder
 
-    def call(self, inputs):
+    def call(self, inputs, **kwargs):
         if self.placeholder:
             return inputs
         a_outputs = None
@@ -651,7 +646,7 @@ class IrrepBatchNorm(Layer):
                                                name='sigma_a')
                 self.running_sigma_b = tf.Variable(initial_value=tf.ones([b]), trainable=False)
 
-    def call(self, inputs, training=True, **kwargs):
+    def call(self, inputs, training=None, **kwargs):
         if self.placeholder:
             return inputs
         a = tf.shape(inputs)
@@ -702,7 +697,7 @@ class IrrepBatchNorm(Layer):
                     return K.concatenate((a_outputs, b_outputs), axis=-1)
                 else:
                     return b_outputs
-            return a_outputs
+            return a_outputs*0
 
 
 class IrrepConcatLayer(Layer):
@@ -715,7 +710,7 @@ class IrrepConcatLayer(Layer):
         self.a = a
         self.b = b
 
-    def call(self, inputs):
+    def call(self, inputs, **kwargs):
         a_outputs = None
         if self.a > 0:
             a_outputs = (inputs[:, :, :self.a] + inputs[:, ::-1, :self.a]) / 2
@@ -744,7 +739,7 @@ class RegConcatLayer(Layer):
         super(RegConcatLayer, self).__init__(**kwargs)
         self.reg = reg
 
-    def call(self, inputs):
+    def call(self, inputs, **kwargs):
         # print('a', inputs[:, :, :self.reg][0, :5, :])
         # print('b', inputs[:, :, self.reg:][0, :5, :])
         # print('c', inputs[:, :, self.reg:][:, ::-1, ::-1][0, :5, :])
@@ -846,8 +841,8 @@ class ToKmerLayer(Layer):
 class EquiNetBinary:
 
     def __init__(self,
-                 filters=[(2, 2), (2, 2), (2, 2), (1, 1)],
-                 kernel_sizes=[5, 5, 7, 7],
+                 filters=((2, 2), (2, 2), (2, 2), (1, 1)),
+                 kernel_sizes=(5, 5, 7, 7),
                  pool_size=40,
                  pool_length=20,
                  out_size=1,
@@ -1157,6 +1152,8 @@ class EquiNetBP(Layer):
         elif self.dataset == "SOX2":
             countouttaskname = "CHIPNexus.SOX2.logcount"
             profileouttaskname = "CHIPNexus.SOX2.profile"
+        else:
+            raise ValueError("The dataset asked does not exist")
         return countouttaskname, profileouttaskname
 
     def get_keras_model(self):
@@ -1274,8 +1271,8 @@ class EquiNetBP(Layer):
 class RCNetBinary:
 
     def __init__(self,
-                 filters=[2, 2, 2],
-                 kernel_sizes=[5, 5, 7],
+                 filters=(2, 2, 2),
+                 kernel_sizes=(5, 5, 7),
                  pool_size=40,
                  pool_length=20,
                  out_size=1,
@@ -1442,11 +1439,11 @@ if __name__ == '__main__':
                 else:
                     targets = tf.random.uniform((self.bs, self.outlen, self.outfeat))
             else:
-                inputs = np.random.uniform(size=(self.bs, self.inlen, self.infeat))
+                inputs = np.ones(shape=(self.bs, self.inlen, self.infeat))
                 if self.binary:
-                    targets = np.random.uniform(size=(self.bs, 1))
+                    targets = np.ones(shape=(self.bs, 1))
                 else:
-                    targets = np.random.uniform(size=(self.bs, self.outlen, self.outfeat))
+                    targets = np.ones(shape=(self.bs, self.outlen, self.outfeat))
             return inputs, targets
 
         def __len__(self):
@@ -1506,7 +1503,7 @@ if __name__ == '__main__':
     # Now create the layers objects
 
     a_1 = 2
-    b_1 = 2
+    b_1 = 0
     a_2 = 2
     b_2 = 1
 
@@ -1567,15 +1564,24 @@ if __name__ == '__main__':
         # out2 = model.predict(rcx)
         # print(out2)
 
+        # from keras_genomics.layers import RevCompConv1D
+        # model = RevCompConv1D(3,10)
+        # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+        # outputs = reg_irrep(inputs)
+        # outputs = ActivationLayer(a_1, b_1)(outputs)
+        # model = keras.Model(inputs, outputs)
+
         # TEST LAYERS OF THE MODELS
         inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
 
         # FIRST MODEL
-        # outputs = reg_irrep(inputs)
-        # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
-        # outputs = IrrepActivationLayer(a_1, b_1)(outputs)
-        # model = keras.Model(inputs, outputs)
-        # model.summary()
+        generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 7, eager=eager)
+        val_generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 7, eager=eager)
+        outputs = reg_irrep(inputs)
+        outputs = IrrepBatchNorm(a_1, b_1)(outputs)
+        outputs = IrrepActivationLayer(a_1, b_1)(outputs)
+        model = keras.Model(inputs, outputs)
+        model.summary()
 
         # K-MERS
         # to_kmer = ToKmerLayer(k=3)
@@ -1590,18 +1596,20 @@ if __name__ == '__main__':
         # model = keras.Model(inputs, outputs)
 
         # FULL MODEL
-        # model = EquiNetBinary(placeholder_bn=True).func_api_model()
+        # generator = Generator(binary=True, eager=eager)
+        # val_generator = Generator(binary=True, eager=eager)
+        # model = EquiNetBinary(placeholder_bn=False).func_api_model()
         # model.summary()
 
-        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
-        # model.fit_generator(generator)
+        model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
+        model.fit_generator(generator,
+                            validation_data=val_generator,
+                            validation_steps=10,
+                            epochs=3)
 
-        # from keras_genomics.layers import RevCompConv1D
-        # model = RevCompConv1D(3,10)
-        # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-        # outputs = reg_irrep(inputs)
-        # outputs = ActivationLayer(a_1, b_1)(outputs)
-        # model = keras.Model(inputs, outputs)
+        x = np.random.uniform(size=(1, 1000, 4))
+        out1 = model.predict(x)
+        print(out1)
 
         # ========= BPNets ===========
 
@@ -1634,11 +1642,11 @@ if __name__ == '__main__':
         # }
         # rc_model = RcBPNetArch(is_add=True, **PARAMETERS).get_keras_model()
         # print(rc_model.summary())
-        rc_model = EquiNetBP(dataset='SOX2', kmers=4).get_keras_model()
-        print(rc_model.summary())
-        generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager)
+        # rc_model = EquiNetBP(dataset='SOX2', kmers=4).get_keras_model()
+        # print(rc_model.summary())
+        # generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager)
 
-        rc_model.fit_generator(generator)
+        # rc_model.fit_generator(generator)
 
     if eager:
         # For random one hot of size (2,100,4)
