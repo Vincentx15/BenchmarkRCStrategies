@@ -697,7 +697,7 @@ class IrrepBatchNorm(Layer):
                     return K.concatenate((a_outputs, b_outputs), axis=-1)
                 else:
                     return b_outputs
-            return a_outputs*0
+            return a_outputs
 
 
 class IrrepConcatLayer(Layer):
@@ -831,9 +831,7 @@ class ToKmerLayer(Layer):
         return input_shape[0], input_shape[1] - self.k + 1, self.features
 
     def get_config(self):
-        config = {'k': self.k,
-                  'kernel': self.kernel
-                  }
+        config = {'k': self.k}
         base_config = super(ToKmerLayer, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
@@ -1459,13 +1457,14 @@ if __name__ == '__main__':
         Also a toy generator to use for the BPN task (the output is a dict of tensors)
         """
 
-        def __init__(self, eager=False, inlen=1000, outlen=1000, infeat=4, outfeat=1, bs=1):
+        def __init__(self, eager=False, inlen=1000, outlen=1000, infeat=4, outfeat=1, bs=1, length=10):
             self.eager = eager
             self.inlen = inlen
             self.outlen = outlen
             self.infeat = infeat
             self.outfeat = outfeat
             self.bs = bs
+            self.length = length
 
         def __getitem__(self, item):
             if self.eager:
@@ -1493,7 +1492,7 @@ if __name__ == '__main__':
             return inputs, targets
 
         def __len__(self):
-            return 10
+            return self.length
 
         def __iter__(self):
             for item in (self[i] for i in range(len(self))):
@@ -1575,13 +1574,13 @@ if __name__ == '__main__':
         inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
 
         # FIRST MODEL
-        generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 7, eager=eager)
-        val_generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 7, eager=eager)
-        outputs = reg_irrep(inputs)
-        outputs = IrrepBatchNorm(a_1, b_1)(outputs)
-        outputs = IrrepActivationLayer(a_1, b_1)(outputs)
-        model = keras.Model(inputs, outputs)
-        model.summary()
+        # generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 7, eager=eager)
+        # val_generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 7, eager=eager)
+        # outputs = reg_irrep(inputs)
+        # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
+        # outputs = IrrepActivationLayer(a_1, b_1)(outputs)
+        # model = keras.Model(inputs, outputs)
+        # model.summary()
 
         # K-MERS
         # to_kmer = ToKmerLayer(k=3)
@@ -1601,15 +1600,15 @@ if __name__ == '__main__':
         # model = EquiNetBinary(placeholder_bn=False).func_api_model()
         # model.summary()
 
-        model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
-        model.fit_generator(generator,
-                            validation_data=val_generator,
-                            validation_steps=10,
-                            epochs=3)
+        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
+        # model.fit_generator(generator,
+        #                     validation_data=val_generator,
+        #                     validation_steps=10,
+        #                     epochs=3)
 
-        x = np.random.uniform(size=(1, 1000, 4))
-        out1 = model.predict(x)
-        print(out1)
+        # x = np.random.uniform(size=(1, 1000, 4))
+        # out1 = model.predict(x)
+        # print(out1)
 
         # ========= BPNets ===========
 
@@ -1642,11 +1641,39 @@ if __name__ == '__main__':
         # }
         # rc_model = RcBPNetArch(is_add=True, **PARAMETERS).get_keras_model()
         # print(rc_model.summary())
-        # rc_model = EquiNetBP(dataset='SOX2', kmers=4).get_keras_model()
+        rc_model = EquiNetBP(dataset='SOX2', kmers=4).get_keras_model()
         # print(rc_model.summary())
-        # generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager)
+        generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager, length=3)
+        rc_model.fit_generator(generator)
 
-        # rc_model.fit_generator(generator)
+        # MODEL SAVING AND LOADING
+        # model_name = 'toto.p'
+        # rc_model.save(model_name)
+        # from keras.models import load_model
+        # import keras.losses
+        # keras.losses.MultichannelMultinomialNLL = MultichannelMultinomialNLL
+        # equilayers = {'RegToRegConv': RegToRegConv,
+        #               'RegToIrrepConv': RegToIrrepConv,
+        #               'IrrepToRegConv': IrrepToRegConv,
+        #               'IrrepToIrrepConv': IrrepToIrrepConv,
+        #               'IrrepActivationLayer': IrrepActivationLayer,
+        #               'RegBatchNorm': RegBatchNorm,
+        #               'IrrepBatchNorm': IrrepBatchNorm,
+        #               'IrrepConcatLayer': IrrepConcatLayer,
+        #               'RegConcatLayer': RegConcatLayer,
+        #               'loss': MultichannelMultinomialNLL,
+        #               'ToKmerLayer': ToKmerLayer}
+        # model = load_model(model_name, custom_objects=equilayers)
+        #
+        # # print(model.to_kmer.kernel)
+        # inputs_1 = np.random.uniform(size=(2, 1346, 4))
+        # inputs_2 = np.random.uniform(size=(2, 2))
+        # inputs_3 = np.random.uniform(size=(2, 1000, 2))
+        # inputs = {'sequence': inputs_1,
+        #           'patchcap.logcount': inputs_2,
+        #           'patchcap.profile': inputs_3}
+        # out1 = model.predict(inputs)
+        # print(out1)
 
     if eager:
         # For random one hot of size (2,100,4)

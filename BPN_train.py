@@ -21,9 +21,6 @@ from seqdataloader.batchproducers.coordbased.coordbatchtransformers import get_r
 
 from keras_genomics.layers.convolutional import RevCompConv1D
 
-# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-
 from BPNetArchs import RcBPNetArch
 from equinet import *
 from equinet import EquiNetBP
@@ -517,11 +514,12 @@ equilayers = {'RegToRegConv': RegToRegConv,
               'RegConcatLayer': RegConcatLayer,
               'loss': MultichannelMultinomialNLL,
               'MultichannelMultinomialNLL': MultichannelMultinomialNLL,
-              'RevCompConv1D': RevCompConv1D}
+              'RevCompConv1D': RevCompConv1D,
+              'ToKmerLayer': ToKmerLayer}
 
 
 def test_saved_model(model_name, custom_objects=equilayers):
-    model = load_model(model_name, custom_objects=equilayers)
+    model = load_model(model_name, custom_objects=custom_objects)
 
     batch_generator, keras_rc_test_batch_generator = get_test_generator(
         PARAMETERS=PARAMETERS, inputs_coordstovals=inputs_coordstovals, targets_coordstovals=targets_coordstovals)
@@ -548,5 +546,5 @@ def train_test_model(model, model_name='default'):
     print(f'{model_name} performance : ', jsd, pears, spear, mse)
     return jsd, pears, spear, mse
 
-train_test_model(equinet_model, model_name=MODEL_NAME)
 
+train_test_model(equinet_model, model_name=MODEL_NAME)
