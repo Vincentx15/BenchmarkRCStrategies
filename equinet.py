@@ -570,7 +570,7 @@ class RegBatchNorm(Layer):
             self.running_mu = tf.Variable(initial_value=tf.zeros([reg_dim]), trainable=False)
             self.running_sigma = tf.Variable(initial_value=tf.ones([reg_dim]), trainable=False)
 
-    def call(self, inputs, training=True):
+    def call(self, inputs, training=True, **kwargs):
         if self.placeholder:
             return inputs
         a = tf.shape(inputs)
@@ -651,7 +651,7 @@ class IrrepBatchNorm(Layer):
                                                name='sigma_a')
                 self.running_sigma_b = tf.Variable(initial_value=tf.ones([b]), trainable=False)
 
-    def call(self, inputs, training=True):
+    def call(self, inputs, training=True, **kwargs):
         if self.placeholder:
             return inputs
         a = tf.shape(inputs)
@@ -769,6 +769,8 @@ class ToKmerLayer(Layer):
     def __init__(self, k=3, **kwargs):
         super(ToKmerLayer, self).__init__(**kwargs)
         self.k = k
+        # We have extra features in case of even filters because of palindromic k-mers
+        self.features = 4 ** k if k % 2 else 4 ** k + (4 ** (k // 2))
         self.kernel = self.build_kernel()
 
     def build_kernel(self):
@@ -805,7 +807,7 @@ class ToKmerLayer(Layer):
                 all_kernels.appendleft(one_hot_rc)
 
         # We get (self.k, 4, n_kmers_filters) shape that checks the equivariance condition
-        # n_kmers = 4**k for odd k and 4**k + 4**(k-1) for even because we repeat palindromic units
+        # n_kmers = 4**k for odd k and 4**k + 4**(k//2) for even because we repeat palindromic units
         all_kernels = list(all_kernels)
         kernel = np.stack(all_kernels, axis=-1)
         # print(kernel.shape)
@@ -814,7 +816,9 @@ class ToKmerLayer(Layer):
         kernel = tf.Variable(initial_value=tf.convert_to_tensor(kernel, dtype=float), trainable=False)
         return kernel
 
-    def call(self, inputs):
+    def call(self, inputs, **kwargs):
+        if self.k == 1:
+            return inputs
         outputs = K.conv1d(inputs,
                            self.kernel,
                            padding='valid')
@@ -824,15 +828,12 @@ class ToKmerLayer(Layer):
         #                    padding='valid')
         # print(tf.reduce_mean(outputs-outputs2[:, ::-1, ::-1]))
 
-        # print(outputs[0])
         outputs = tf.math.greater(outputs, tf.constant([self.k - 1], dtype=float))
         outputs = tf.cast(outputs, dtype=float)
-        np_outputs = outputs.numpy()
-        # print(np_outputs[0].sum(axis=1))
         return outputs
 
     def compute_output_shape(self, input_shape):
-        return input_shape[0], input_shape[1] - self.k + 1, input_shape[2]
+        return input_shape[0], input_shape[1] - self.k + 1, self.features
 
     def get_config(self):
         config = {'k': self.k,
@@ -1010,6 +1011,7 @@ class MultichannelMultinomialNLL(object):
         self.n = n
 
     def __call__(self, true_counts, logits):
+        total = 0
         for i in range(self.n):
             loss = multinomial_nll(true_counts[..., i], logits[..., i])
             if i == 0:
@@ -1037,8 +1039,9 @@ class EquiNetBP(Layer):
                  kernel_initializer="glorot_uniform",
                  seed=42,
                  is_add=True,
+                 kmers=1,
                  **kwargs):
-        super(EquiNetBP, self).__init__()
+        super(EquiNetBP, self).__init__(**kwargs)
 
         self.dataset = dataset
         self.input_seq_len = input_seq_len
@@ -1055,11 +1058,14 @@ class EquiNetBP(Layer):
         self.seed = seed
         self.is_add = is_add
         self.n_dil_layers = len(filters) - 1
-        countouttaskname, profileouttaskname = self.get_names()
 
+        # Add k-mers, if k=1, it's just a placeholder
+        self.kmers = int(kmers)
+        self.to_kmer = ToKmerLayer(k=self.kmers)
+        self.conv1_kernel_size = kernel_sizes[0] - self.kmers + 1
+        reg_in = self.to_kmer.features // 2
         first_a, first_b = filters[0]
-        self.conv1_kernel_size = kernel_sizes[0]
-        self.first_conv = RegToIrrepConv(reg_in=2,
+        self.first_conv = RegToIrrepConv(reg_in=reg_in,
                                          a_out=first_a,
                                          b_out=first_b,
                                          kernel_size=self.conv1_kernel_size,
@@ -1164,8 +1170,9 @@ class EquiNetBP(Layer):
         """
         sequence_input, bias_counts_input, bias_profile_input = self.get_inputs()
 
-        curr_layer_size = self.input_seq_len - (self.conv1_kernel_size - 1)
-        prev_layers = self.first_conv(sequence_input)
+        kmer_inputs = self.to_kmer(sequence_input)
+        curr_layer_size = self.input_seq_len - (self.conv1_kernel_size - 1) - (self.kmers - 1)
+        prev_layers = self.first_conv(kmer_inputs)
 
         for i, (conv_layer, activation_layer, cropping) in enumerate(zip(self.irrep_layers,
                                                                          self.activation_layers,
@@ -1224,8 +1231,9 @@ class EquiNetBP(Layer):
         """
         Testing only
         """
-        curr_layer_size = self.input_seq_len - (self.conv1_kernel_size - 1)
-        prev_layers = self.first_conv(sequence_input)
+        kmer_inputs = self.to_kmer(sequence_input)
+        curr_layer_size = self.input_seq_len - (self.conv1_kernel_size - 1) - (self.kmers - 1)
+        prev_layers = self.first_conv(kmer_inputs)
 
         for i, (conv_layer, activation_layer, cropping) in enumerate(zip(self.irrep_layers,
                                                                          self.activation_layers,
@@ -1401,7 +1409,7 @@ if __name__ == '__main__':
     import tensorflow as tf
     from keras.utils import Sequence
 
-    eager = True
+    eager = False
     if eager:
         tf.enable_eager_execution()
 
@@ -1559,22 +1567,36 @@ if __name__ == '__main__':
         # out2 = model.predict(rcx)
         # print(out2)
 
-        # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+        # TEST LAYERS OF THE MODELS
+        inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+
+        # FIRST MODEL
         # outputs = reg_irrep(inputs)
         # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
-        # outputs = ActivationLayer(a_1, b_1)(outputs)
+        # outputs = IrrepActivationLayer(a_1, b_1)(outputs)
         # model = keras.Model(inputs, outputs)
         # model.summary()
+
+        # K-MERS
+        # to_kmer = ToKmerLayer(k=3)
+        # new_features = to_kmer.features
+        # reg_irrep_kmers = RegToIrrepConv(reg_in=new_features // 2,
+        #                                  a_out=a_1,
+        #                                  b_out=b_1,
+        #                                  kernel_size=8)
+        # generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 2 - 7, eager=eager)
+        # kmers = to_kmer(inputs)
+        # outputs = reg_irrep_kmers(kmers)
+        # model = keras.Model(inputs, outputs)
+
+        # FULL MODEL
         # model = EquiNetBinary(placeholder_bn=True).func_api_model()
         # model.summary()
+
         # model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
         # model.fit_generator(generator)
 
         # from keras_genomics.layers import RevCompConv1D
-        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
-        #               loss="binary_crossentropy",
-        #               metrics=["accuracy"])
-
         # model = RevCompConv1D(3,10)
         # inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
         # outputs = reg_irrep(inputs)
@@ -1612,22 +1634,20 @@ if __name__ == '__main__':
         # }
         # rc_model = RcBPNetArch(is_add=True, **PARAMETERS).get_keras_model()
         # print(rc_model.summary())
-        rc_model = EquiNetBP(dataset='SOX2').get_keras_model()
-        # print(rc_model.summary())
+        rc_model = EquiNetBP(dataset='SOX2', kmers=4).get_keras_model()
+        print(rc_model.summary())
         generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager)
 
         rc_model.fit_generator(generator)
 
     if eager:
-        # x = tf.ones((2, 1000, 4))
-        # x = tf.random.uniform((2, 1000, 4))
         # For random one hot of size (2,100,4)
         randints_np = np.random.randint(0, 3, size=20)
         one_hot_np = np.eye(4)[randints_np]
         one_hot_np = np.stack((one_hot_np[:10], one_hot_np[10:]), axis=0)
         x = tf.convert_to_tensor(one_hot_np, dtype=float)
 
-        tokmer = ToKmerLayer(2)
+        tokmer = ToKmerLayer(4)
         kmer_x = tokmer(x)
 
         # x2 = x[:, ::-1, ::-1]
