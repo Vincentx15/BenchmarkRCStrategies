@@ -740,7 +740,7 @@ class RegConcatLayer(Layer):
     Concatenation layer to average both strands outputs
     """
 
-    def __init__(self, reg,**kwargs):
+    def __init__(self, reg, **kwargs):
         super(RegConcatLayer, self).__init__(**kwargs)
         self.reg = reg
 
@@ -758,6 +758,87 @@ class RegConcatLayer(Layer):
         config = {'reg': self.reg,
                   }
         base_config = super(RegConcatLayer, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
+class ToKmerLayer(Layer):
+    """
+        to go from 1-hot strand in regular representation to another one
+        """
+
+    def __init__(self, k=3, **kwargs):
+        super(ToKmerLayer, self).__init__(**kwargs)
+        self.k = k
+        self.kernel = self.build_kernel()
+
+    def build_kernel(self):
+        """
+        Build pattern extractor :
+        We build ordered filters and then perform convolution.
+        If the full pattern is detected ie we get a specific k_mer, we have a score of k so we can use thresholding
+        to get the one hot representation.
+        """
+        import collections
+        all_kernels = collections.deque()
+        hashing_set = set()
+
+        # In order to get the filters enumeration, we use the base 4 decomposition.
+        # We then add the RC filter at the right position using a deque.
+        # We have to hash our results because the filters are not contiguous i
+        for i in range(4 ** self.k):
+            # Get the string and array representation in base 4 for both forward and rc
+            tempencoding = np.base_repr(i, 4, padding=self.k)[-self.k:]
+            padded_split = [int(char) for char in tempencoding]
+            rc_padded_split = [4 - (i + 1) for i in reversed(padded_split)]
+            rc_hash = ''.join([str(i) for i in rc_padded_split])
+
+            if rc_hash not in hashing_set:
+                # If they are not yet in the filter bank, one-hot encode them and add them
+                hashing_set.add(rc_hash)
+                hashing_set.add(tempencoding)
+                np_forward = np.array(padded_split)
+                np_rc = np.array(rc_padded_split)
+
+                one_hot_forward = np.eye(4)[np_forward]
+                one_hot_rc = np.eye(4)[np_rc]
+                all_kernels.append(one_hot_forward)
+                all_kernels.appendleft(one_hot_rc)
+
+        # We get (self.k, 4, n_kmers_filters) shape that checks the equivariance condition
+        # n_kmers = 4**k for odd k and 4**k + 4**(k-1) for even because we repeat palindromic units
+        all_kernels = list(all_kernels)
+        kernel = np.stack(all_kernels, axis=-1)
+        # print(kernel.shape)
+        # print(np.mean(kernel - kernel[::-1, ::-1, ::-1]))
+
+        kernel = tf.Variable(initial_value=tf.convert_to_tensor(kernel, dtype=float), trainable=False)
+        return kernel
+
+    def call(self, inputs):
+        outputs = K.conv1d(inputs,
+                           self.kernel,
+                           padding='valid')
+        # x2 = inputs[:, ::-1, ::-1]
+        # outputs2 = K.conv1d(x2,
+        #                    self.kernel,
+        #                    padding='valid')
+        # print(tf.reduce_mean(outputs-outputs2[:, ::-1, ::-1]))
+
+        # print(outputs[0])
+        outputs = tf.math.greater(outputs, tf.constant([self.k - 1], dtype=float))
+        outputs = tf.cast(outputs, dtype=float)
+        np_outputs = outputs.numpy()
+        # print(np_outputs[0].sum(axis=1))
+        return outputs
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[0], input_shape[1] - self.k + 1, input_shape[2]
+
+    def get_config(self):
+        config = {'k': self.k,
+                  'kernel': self.kernel
+                  }
+        base_config = super(ToKmerLayer, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
 
@@ -1320,7 +1401,7 @@ if __name__ == '__main__':
     import tensorflow as tf
     from keras.utils import Sequence
 
-    eager = False
+    eager = True
     if eager:
         tf.enable_eager_execution()
 
@@ -1538,8 +1619,30 @@ if __name__ == '__main__':
         rc_model.fit_generator(generator)
 
     if eager:
-        x = tf.random.uniform((2, 1000, 4))
-        x2 = x[:, ::-1, ::-1]
+        # x = tf.ones((2, 1000, 4))
+        # x = tf.random.uniform((2, 1000, 4))
+        # For random one hot of size (2,100,4)
+        randints_np = np.random.randint(0, 3, size=20)
+        one_hot_np = np.eye(4)[randints_np]
+        one_hot_np = np.stack((one_hot_np[:10], one_hot_np[10:]), axis=0)
+        x = tf.convert_to_tensor(one_hot_np, dtype=float)
+
+        tokmer = ToKmerLayer(2)
+        kmer_x = tokmer(x)
+
+        # x2 = x[:, ::-1, ::-1]
+        # rc_kmer_x = tokmer(x2)
+        # flipped_rc = rc_kmer_x[:, ::-1, ::-1]
+
+        np_kmer = kmer_x.numpy()
+        # Should be full ones with a few 2 because of palindromic representation
+        print(np_kmer.sum(axis=2))
+
+
+        # print(np_kmer.sum(axis=1).mean(axis=0))
+
+        # print(kmer_x[0,0])
+        # print(flipped_rc[0])
 
         # print('without BN')
         # out1 = RCNetBinary(placeholder_bn=True).eager_call(x)
@@ -1574,11 +1677,10 @@ if __name__ == '__main__':
         # print('reversed')
         # print(out2.numpy()[::-1])
 
-        generator = BPNGenerator(inlen=1346, outfeat=128, outlen=1000, eager=eager, bs=2)
+        # generator = BPNGenerator(inlen=1346, outfeat=128, outlen=1000, eager=eager, bs=2)
         # inputs = next(iter(generator))
         # a, b, c = inputs[0].values()
-        rc_model = EquiNetBP(dataset='SOX2')
-
+        # rc_model = EquiNetBP(dataset='SOX2')
 
         class testmodel:
             def __init__(self):
@@ -1606,19 +1708,18 @@ if __name__ == '__main__':
                 outputs = self.irrep_irrep(outputs)
                 return outputs
 
-
-        epochs_to_train_for = 10
+        # epochs_to_train_for = 10
         # model = testmodel()
-        model = rc_model
-        optimizer = tf.keras.optimizers.Adam()
+        # model = rc_model
+        # optimizer = tf.keras.optimizers.Adam()
 
-        for epoch in range(epochs_to_train_for):
-            for batch_idx, dicts_data in enumerate(generator):
-                ((a, b, c), (out_count, out_profile)) = dicts_data[0].values(), dicts_data[1].values()
-                with tf.GradientTape() as tape:
-                    count, profile = model.eager_call(a, b, c)
-                    loss = tf.reduce_mean(tf.keras.losses.MSE(out_profile, profile))
-                    grads = tape.gradient(loss, model.trainable_weights)
-
-                optimizer.apply_gradients(zip(grads, model.trainable_weights))
-                print(loss.numpy().item())
+        # for epoch in range(epochs_to_train_for):
+        #     for batch_idx, dicts_data in enumerate(generator):
+        #         ((a, b, c), (out_count, out_profile)) = dicts_data[0].values(), dicts_data[1].values()
+        #         with tf.GradientTape() as tape:
+        #             count, profile = model.eager_call(a, b, c)
+        #             loss = tf.reduce_mean(tf.keras.losses.MSE(out_profile, profile))
+        #             grads = tape.gradient(loss, model.trainable_weights)
+        #
+        #         optimizer.apply_gradients(zip(grads, model.trainable_weights))
+        #         print(loss.numpy().item())
