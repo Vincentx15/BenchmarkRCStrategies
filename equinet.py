@@ -649,6 +649,10 @@ class IrrepBatchNorm(Layer):
     def call(self, inputs, training=None, **kwargs):
         if self.placeholder:
             return inputs
+
+        if training is None:
+            training = K.learning_phase()
+
         a = tf.shape(inputs)
         batch_size = a[0]
         length = a[1]
@@ -682,7 +686,7 @@ class IrrepBatchNorm(Layer):
                 else:
                     return b_outputs
             self.passed = self.passed + division_over
-            return a_outputs
+            return a_outputs * 10000
         else:
             a_outputs = None
             if self.a > 0:
@@ -697,7 +701,7 @@ class IrrepBatchNorm(Layer):
                     return K.concatenate((a_outputs, b_outputs), axis=-1)
                 else:
                     return b_outputs
-            return a_outputs
+            return a_outputs * 10000
 
 
 class IrrepConcatLayer(Layer):
@@ -1574,13 +1578,13 @@ if __name__ == '__main__':
         inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
 
         # FIRST MODEL
-        # generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 7, eager=eager)
-        # val_generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 7, eager=eager)
-        # outputs = reg_irrep(inputs)
-        # outputs = IrrepBatchNorm(a_1, b_1)(outputs)
+        generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 7, eager=eager)
+        val_generator = Generator(outfeat=a_1 + b_1, outlen=1000 - 7, eager=eager)
+        outputs = reg_irrep(inputs)
+        outputs = IrrepBatchNorm(a_1, b_1)(outputs)
         # outputs = IrrepActivationLayer(a_1, b_1)(outputs)
-        # model = keras.Model(inputs, outputs)
-        # model.summary()
+        model = keras.Model(inputs, outputs)
+        model.summary()
 
         # K-MERS
         # to_kmer = ToKmerLayer(k=3)
@@ -1600,11 +1604,11 @@ if __name__ == '__main__':
         # model = EquiNetBinary(placeholder_bn=False).func_api_model()
         # model.summary()
 
-        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="binary_crossentropy", metrics=["accuracy"])
-        # model.fit_generator(generator,
-        #                     validation_data=val_generator,
-        #                     validation_steps=10,
-        #                     epochs=3)
+        model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="mse", metrics=["accuracy"])
+        model.fit_generator(generator,
+                            validation_data=val_generator,
+                            validation_steps=10,
+                            epochs=3)
 
         # x = np.random.uniform(size=(1, 1000, 4))
         # out1 = model.predict(x)
@@ -1641,10 +1645,10 @@ if __name__ == '__main__':
         # }
         # rc_model = RcBPNetArch(is_add=True, **PARAMETERS).get_keras_model()
         # print(rc_model.summary())
-        rc_model = EquiNetBP(dataset='SOX2', kmers=4).get_keras_model()
+        # rc_model = EquiNetBP(dataset='SOX2', kmers=4).get_keras_model()
         # print(rc_model.summary())
-        generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager, length=3)
-        rc_model.fit_generator(generator)
+        # generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager, length=3)
+        # rc_model.fit_generator(generator)
 
         # MODEL SAVING AND LOADING
         # model_name = 'toto.p'

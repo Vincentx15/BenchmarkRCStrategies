@@ -150,11 +150,13 @@ class AbstractProfileModel(object):
 
 
 class RcBPNetArch(AbstractProfileModel):
-    def __init__(self, is_add, **kwargs):
+    def __init__(self, is_add, kmers=1, **kwargs):
         super().__init__(**kwargs)
         self.is_add = is_add
+        self.kmers = kmers
 
     def get_keras_model(self):
+        from equinet import ToKmerLayer
         np.random.seed(self.seed)
         tf.set_random_seed(self.seed)
 
@@ -164,11 +166,12 @@ class RcBPNetArch(AbstractProfileModel):
         out_pred_len = self.get_output_profile_len()
         curr_layer_size = self.input_seq_len - (self.conv1_kernel_size - 1)
 
+        kmer_inp = ToKmerLayer(k=self.kmers)(inp)
         first_conv = RevCompConv1D(filters=self.filters,
-                                   kernel_size=self.conv1_kernel_size,
+                                   kernel_size=self.conv1_kernel_size - self.kmers + 1,
                                    kernel_initializer=self.kernel_initializer,
                                    padding='valid',
-                                   activation='relu')(inp)
+                                   activation='relu')(kmer_inp)
 
         prev_layers = first_conv
         for i in range(1, self.n_dil_layers + 1):
