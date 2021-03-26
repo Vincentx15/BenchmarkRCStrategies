@@ -650,9 +650,6 @@ class IrrepBatchNorm(Layer):
         if self.placeholder:
             return inputs
 
-        if training is None:
-            training = K.learning_phase()
-
         a = tf.shape(inputs)
         batch_size = a[0]
         length = a[1]
