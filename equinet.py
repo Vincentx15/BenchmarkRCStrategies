@@ -620,6 +620,8 @@ class RegBatchNorm(Layer):
     def get_config(self):
         config = {'reg_dim': self.reg_dim,
                   'placeholder': self.placeholder,
+                  'momentum': self.momentum,
+                  'use_momentum': self.use_momentum
                   }
         base_config = super(RegBatchNorm, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
@@ -749,6 +751,16 @@ class IrrepBatchNorm(Layer):
 
     def compute_output_shape(self, input_shape):
         return input_shape[0], input_shape[1], input_shape[2]
+
+    def get_config(self):
+        config = {'a': self.a,
+                  'b': self.b,
+                  'placeholder': self.placeholder,
+                  'momentum': self.momentum,
+                  'use_momentum': self.use_momentum
+                  }
+        base_config = super(IrrepBatchNorm, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
 class IrrepConcatLayer(Layer):
@@ -1046,7 +1058,6 @@ def multinomial_nll(true_counts, logits):
             tf.cast((tf.shape(true_counts)[0]), tf.float32))
 
 
-# from https://github.com/kundajelab/basepair/blob/cda0875571066343cdf90aed031f7c51714d991a/basepair/losses.py#L87
 class MultichannelMultinomialNLL(object):
     def __init__(self, n=2):
         self.__name__ = "MultichannelMultinomialNLL"
@@ -1454,7 +1465,7 @@ if __name__ == '__main__':
     import tensorflow as tf
     from keras.utils import Sequence
 
-    eager = False
+    eager = True
 
     if eager:
         tf.enable_eager_execution()
@@ -1660,8 +1671,8 @@ if __name__ == '__main__':
         # model = keras.Model(inputs, outputs)
 
         # BatchNorm
-        generator = Generator(outlen=1000 - 7 - 7 - 7, outfeat=2)
-        val_generator = Generator(outlen=1000 - 7 - 7 - 7, outfeat=2)
+        generator = Generator(outlen=1000 - 7 - 7 - 7, outfeat=3)
+        val_generator = Generator(outlen=1000 - 7 - 7 - 7, outfeat=3)
         outputs = reg_reg(inputs)
         outputs = RegBatchNorm(reg_dim=reg_out)(outputs)
 
@@ -1757,10 +1768,7 @@ if __name__ == '__main__':
 
     if eager:
         # For random one hot of size (2,100,4)
-        randints_np = np.random.randint(0, 3, size=20)
-        one_hot_np = np.eye(4)[randints_np]
-        one_hot_np = np.stack((one_hot_np[:10], one_hot_np[10:]), axis=0)
-        x = tf.convert_to_tensor(one_hot_np, dtype=float)
+        x = random_one_hot(size=(2,100), return_tf=True)
 
         tokmer = ToKmerLayer(4)
         kmer_x = tokmer(x)
@@ -1830,13 +1838,13 @@ if __name__ == '__main__':
         # a, b, c = inputs[0].values()
         # rc_model = EquiNetBP(dataset='SOX2')
 
-        class testmodel:
+        class testmodel(keras.Model):
             def __init__(self):
                 super(testmodel, self).__init__()
 
                 a_1 = 2
                 b_1 = 2
-                a_2 = 2
+                a_2 = 0
                 b_2 = 2
 
                 self.reg_irrep = RegToIrrepConv(reg_in=2,
@@ -1856,6 +1864,9 @@ if __name__ == '__main__':
                 outputs = self.irrep_irrep(outputs)
                 return outputs
 
+            # Weird not implemented error in eager mode...
+            def compute_output_shape(self, input_shape):
+                return None
 
         # epochs_to_train_for = 10
         # model = testmodel()
@@ -1891,13 +1902,17 @@ if __name__ == '__main__':
                     loss = tf.reduce_mean(tf.keras.losses.MSE(batch_out, pred))
                     grads = tape.gradient(loss, model.trainable_weights)
                 optimizer.apply_gradients(zip(grads, model.trainable_weights))
-                print('running sigma', model.irrep_bn.running_sigma_b.numpy())
-                print('sigmab', model.irrep_bn.sigma_b.numpy())
+
+                # Check a dims
                 # print('running mu', model.irrep_bn.running_mu_a.numpy())
                 # print('running sigma', model.irrep_bn.running_sigma_a.numpy())
                 # print('mua', model.irrep_bn.mu_a.numpy())
                 # print('sigmaa', model.irrep_bn.sigma_a.numpy())
-                print()
+
+                # Check b dims
+                # print('running sigma', model.irrep_bn.running_sigma_b.numpy())
+                # print('sigmab', model.irrep_bn.sigma_b.numpy())
+                # print()
             print(loss.numpy())
 
         # print('Prediction phase')
