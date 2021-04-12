@@ -107,9 +107,10 @@ class RegToIrrepConv(Layer):
         self.padding = padding
         self.dilatation = dilatation
 
-        self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
-                                           initializer=self.kernel_initializer,
-                                           name='left_kernel')
+        if self.kernel_size > 1:
+            self.left_kernel = self.add_weight(shape=(self.kernel_size // 2, self.input_dim, self.filters),
+                                               initializer=self.kernel_initializer,
+                                               name='left_kernel')
 
         # odd size : To get the equality for x=0, we need to have transposed columns + flipped bor the b_out dims
         if self.kernel_size % 2 == 1:
@@ -611,7 +612,7 @@ class RegBatchNorm(Layer):
 
         out = K.in_train_phase(train_true_normed_inputs, test_true_normed_inputs)
         # out = K.in_train_phase(train_true_normed_inputs, 0 * test_true_normed_inputs)
-        # out = K.in_train_phase(0 * test_true_normed_inputs, train_true_normed_inputs)
+        # out = K.in_train_phase(0 * train_true_normed_inputs, test_true_normed_inputs)
         return out
 
     def compute_output_shape(self, input_shape):
@@ -632,7 +633,7 @@ class IrrepBatchNorm(Layer):
     BN layer for a_n, b_n feature map
     """
 
-    def __init__(self, a, b, placeholder=False, use_momentum=True, momentum=0.99, **kwargs):
+    def __init__(self, a, b, placeholder=False, use_momentum=True, momentum=0.1, **kwargs):
         super(IrrepBatchNorm, self).__init__(**kwargs)
         self.a = a
         self.b = b
@@ -1465,7 +1466,7 @@ if __name__ == '__main__':
     import tensorflow as tf
     from keras.utils import Sequence
 
-    eager = True
+    eager = False
 
     if eager:
         tf.enable_eager_execution()
@@ -1677,7 +1678,7 @@ if __name__ == '__main__':
         outputs = RegBatchNorm(reg_dim=reg_out)(outputs)
 
         outputs = reg_irrep(outputs)
-        outputs = IrrepBatchNorm(a_1, b_1)(outputs)
+        outputs = IrrepBatchNorm(a_1, b_1, momentum=0.1)(outputs)
         outputs = irrep_irrep(outputs)
 
         # outputs = IrrepActivationLayer(a_1, b_1)(outputs)
@@ -1768,22 +1769,16 @@ if __name__ == '__main__':
 
     if eager:
         # For random one hot of size (2,100,4)
-        x = random_one_hot(size=(2,100), return_tf=True)
-
-        tokmer = ToKmerLayer(4)
-        kmer_x = tokmer(x)
-
+        # x = random_one_hot(size=(2, 100), return_tf=True)
+        # tokmer = ToKmerLayer(4)
+        # kmer_x = tokmer(x)
         # x2 = x[:, ::-1, ::-1]
         # rc_kmer_x = tokmer(x2)
         # flipped_rc = rc_kmer_x[:, ::-1, ::-1]
-
-        np_kmer = kmer_x.numpy()
+        # np_kmer = kmer_x.numpy()
         # Should be full ones with a few 2 because of palindromic representation
-        print(np_kmer.sum(axis=2))
-
-
+        # print(np_kmer.sum(axis=2))
         # print(np_kmer.sum(axis=1).mean(axis=0))
-
         # print(kmer_x[0,0])
         # print(flipped_rc[0])
 
@@ -1851,7 +1846,7 @@ if __name__ == '__main__':
                                                 a_out=a_1,
                                                 b_out=b_1,
                                                 kernel_size=8)
-                self.irrep_bn = IrrepBatchNorm(a_1, b_1)
+                self.irrep_bn = IrrepBatchNorm(a_1, b_1, momentum=0.99)
                 self.irrep_irrep = IrrepToIrrepConv(a_in=a_1,
                                                     b_in=b_1,
                                                     a_out=a_2,
@@ -1868,21 +1863,6 @@ if __name__ == '__main__':
             def compute_output_shape(self, input_shape):
                 return None
 
-        # epochs_to_train_for = 10
-        # model = testmodel()
-        # model = rc_model
-        # optimizer = tf.keras.optimizers.Adam()
-
-        # for epoch in range(epochs_to_train_for):
-        #     for batch_idx, dicts_data in enumerate(generator):
-        #         ((a, b, c), (out_count, out_profile)) = dicts_data[0].values(), dicts_data[1].values()
-        #         with tf.GradientTape() as tape:
-        #             count, profile = model.eager_call(a, b, c)
-        #             loss = tf.reduce_mean(tf.keras.losses.MSE(out_profile, profile))
-        #             grads = tape.gradient(loss, model.trainable_weights)
-        #
-        #         optimizer.apply_gradients(zip(grads, model.trainable_weights))
-        #         print(loss.numpy().item())
 
         model = testmodel()
         optimizer = tf.keras.optimizers.Adam()
@@ -1914,11 +1894,11 @@ if __name__ == '__main__':
                 # print('sigmab', model.irrep_bn.sigma_b.numpy())
                 # print()
             print(loss.numpy())
-
-        # print('Prediction phase')
-        # K.set_learning_phase(0)
-        # for epoch in range(10):
-        #     for batch_idx, (batch_in, batch_out) in enumerate(val_generator):
-        #         pred = model(batch_in)
-        #         loss = tf.reduce_mean(tf.keras.losses.MSE(batch_out, pred))
-        #     print(loss.numpy())
+        #
+        print('Prediction phase')
+        K.set_learning_phase(0)
+        for epoch in range(10):
+            for batch_idx, (batch_in, batch_out) in enumerate(val_generator):
+                pred = model(batch_in)
+                loss = tf.reduce_mean(tf.keras.losses.MSE(batch_out, pred))
+            print(loss.numpy())
