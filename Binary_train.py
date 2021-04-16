@@ -433,58 +433,76 @@ def eager_train(model,
 
 
 if __name__ == '__main__':
-    TF = 'CTCF'
+    def plot_values(model, epochs_to_train_for=160, TF='CTCF'):
 
-    valid_data_loader = momma_dragonn.data_loaders.hdf5_data_loader.MultimodalAtOnceDataLoader(
-        path_to_hdf5=f"data/{TF}/valid_data.hdf5", strip_enclosing_dictionary=True)
-    valid_data = valid_data_loader.get_data()
+        valid_data_loader = momma_dragonn.data_loaders.hdf5_data_loader.MultimodalAtOnceDataLoader(
+            path_to_hdf5=f"data/{TF}/valid_data.hdf5", strip_enclosing_dictionary=True)
+        valid_data = valid_data_loader.get_data()
 
-    test_data_loader = momma_dragonn.data_loaders.hdf5_data_loader.MultimodalAtOnceDataLoader(
-        path_to_hdf5=f"data/{TF}/test_data.hdf5", strip_enclosing_dictionary=True)
-    test_data = test_data_loader.get_data()
+        test_data_loader = momma_dragonn.data_loaders.hdf5_data_loader.MultimodalAtOnceDataLoader(
+            path_to_hdf5=f"data/{TF}/test_data.hdf5", strip_enclosing_dictionary=True)
+        test_data = test_data_loader.get_data()
+
+        standard_train_batch_generator = get_generators(TF=TF,
+                                                        seq_len=1000,
+                                                        curr_seed=1234,
+                                                        is_aug=False)
+        auroc_callback, history, trained_model = train_model(model=model,
+                                                             curr_seed=1234,
+                                                             train_data_loader=None,
+                                                             batch_generator=standard_train_batch_generator,
+                                                             valid_data=valid_data,
+                                                             epochs_to_train_for=epochs_to_train_for,
+                                                             upsampling=True)
+        trained_model.set_weights(auroc_callback.best_weights)
+        a = roc_auc_score(y_true=valid_data.Y, y_score=trained_model.predict(valid_data.X))
+        b = roc_auc_score(y_true=test_data.Y, y_score=trained_model.predict(test_data.X))
+        trained_model.set_weights(auroc_callback.best_weights)
+        c = roc_auc_score(y_true=valid_data.Y, y_score=trained_model.predict(valid_data.X))
+        d = roc_auc_score(y_true=test_data.Y, y_score=trained_model.predict(test_data.X))
+        print(a)
+        print(b)
+        print(c)
+        print(d)
+        print("Validation set AUROC with best-loss early stopping:", a)
+        print("Test set AUROC with best-loss early stopping:", b)
+        print("Validation AUROC at best-auroc early stopping:", c)
+        print("Test set AUROC at best-auroc early stopping:", d)
+
+        return a, b, c, d
+
+
     parameters = {
         'filters': 16,
         'input_length': 1000,
         'pool_size': 40,
         'strides': 20
     }
-    epochs_to_train_for = 160
-    standard_train_batch_generator = get_generators(TF=TF,
-                                                    seq_len=1000,
-                                                    curr_seed=1234,
-                                                    is_aug=False)
 
     # model = get_reg_model(parameters)
-    model = get_rc_model(parameters, is_weighted_sum=False)
-    model = equinet.EquiNetBinary(filters=[(16, 16), (16, 16), (16, 16)], kernel_sizes=[15, 14, 14])
-    model = model.func_api_model()
-    model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
-                  loss="binary_crossentropy", metrics=["accuracy"])
+    # model = get_rc_model(parameters, is_weighted_sum=False)
 
-    # cal = lambda: standard_train_batch_generator
-    # train_dataset = tf.data.Dataset.from_generator(cal, (tf.float32, tf.float32))
-    # valid_obj = AuRocNoCallback(model=model, valid_X=valid_data.X, valid_Y=valid_data.Y)
-    # eager_train(model=model, train_dataset=train_dataset, validation_object=valid_obj)
+    epochs_to_train_for = 1
+    outname = 'outfile.txt'
+    with open(outname, 'a') as f:
+        f.write('Experiments results :\n')
 
-    auroc_callback, history, model = train_model(model=model,
-                                                 curr_seed=1234,
-                                                 train_data_loader=None,
-                                                 batch_generator=standard_train_batch_generator,
-                                                 valid_data=valid_data,
-                                                 epochs_to_train_for=epochs_to_train_for,
-                                                 upsampling=True)
+    for k in range(1, 4):
+        print(f'RCPS trained with K={k}')
+        model = equinet.CustomRCPS(kmers=k)
+        model = model.func_api_model()
+        model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                      loss="binary_crossentropy", metrics=["accuracy"])
+        a, b, c, d = plot_values(model, epochs_to_train_for=epochs_to_train_for)
+        with open(outname, 'a') as f:
+            f.write(f'RCPS_{k} {a} {b} {c} {d}\n')
 
-    model.set_weights(auroc_callback.best_weights)
-    a = roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X))
-    b = roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X))
-    model.set_weights(auroc_callback.best_weights)
-    c = roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X))
-    d = roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X))
-    print(a)
-    print(b)
-    print(c)
-    print(d)
-    print("Validation set AUROC with best-loss early stopping:", a)
-    print("Test set AUROC with best-loss early stopping:", b)
-    print("Validation AUROC at best-auroc early stopping:", c)
-    print("Test set AUROC at best-auroc early stopping:", d)
+    for k in range(1, 4):
+        print(f'Equinet trained with K={k}')
+        model = equinet.EquiNetBinary(filters=[(16, 16), (16, 16), (16, 16)], kernel_sizes=[15, 14, 14], kmers=k)
+        model = model.func_api_model()
+        model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                      loss="binary_crossentropy", metrics=["accuracy"])
+        a, b, c, d = plot_values(model, epochs_to_train_for=epochs_to_train_for)
+        with open(outname, 'a') as f:
+            f.write(f'RCPS_{k} {a} {b} {c} {d}\n')

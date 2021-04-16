@@ -949,7 +949,8 @@ class EquiNetBinary:
                  pool_size=40,
                  pool_length=20,
                  out_size=1,
-                 placeholder_bn=False):
+                 placeholder_bn=False,
+                 kmers=1):
         """
         First map the regular representation to irrep setting
         Then goes from one setting to another.
@@ -960,11 +961,15 @@ class EquiNetBinary:
         # successive_shrinking = (i - 1 for i in kernel_sizes)
         # self.input_dense = 1000 - sum(successive_shrinking)
 
+        self.kmers = int(kmers)
+        self.to_kmer = ToKmerLayer(k=self.kmers)
+        reg_in = self.to_kmer.features // 2
+
         # First mapping goes from the input to an irrep feature space
         first_kernel_size = kernel_sizes[0]
         first_a, first_b = filters[0]
         self.last_a, self.last_b = filters[-1]
-        self.reg_irrep = RegToIrrepConv(reg_in=2,
+        self.reg_irrep = RegToIrrepConv(reg_in=reg_in,
                                         a_out=first_a,
                                         b_out=first_b,
                                         kernel_size=first_kernel_size)
@@ -999,7 +1004,9 @@ class EquiNetBinary:
 
     def func_api_model(self):
         inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
-        x = self.reg_irrep(inputs)
+
+        x = self.to_kmer(inputs)
+        x = self.reg_irrep(x)
         x = self.first_bn(x)
         x = self.first_act(x)
 
@@ -1019,7 +1026,8 @@ class EquiNetBinary:
     def eager_call(self, inputs):
         rcinputs = inputs[:, ::-1, ::-1]
 
-        x = self.reg_irrep(inputs)
+        x = self.to_kmer(inputs)
+        x = self.reg_irrep(x)
         x = self.first_bn(x)
         x = self.first_act(x)
 
@@ -1091,16 +1099,22 @@ class EquiNetBinary:
 class CustomRCPS:
 
     def __init__(self,
-                 filters=(2, 16, 16, 16),
+                 filters=(16, 16, 16),
                  kernel_sizes=(15, 14, 14),
                  pool_size=40,
                  pool_length=20,
                  out_size=1,
-                 placeholder_bn=False):
+                 placeholder_bn=False,
+                 kmers=1):
         """
         First map the regular representation to irrep setting
         Then goes from one setting to another.
         """
+
+        self.kmers = int(kmers)
+        self.to_kmer = ToKmerLayer(k=self.kmers)
+        reg_in = self.to_kmer.features // 2
+        filters = [reg_in] + list(filters)
 
         # Now add the intermediate layer : sequence of conv, BN, activation
         self.reg_layers = []
@@ -1125,7 +1139,10 @@ class CustomRCPS:
         self.dense = kl.Dense(out_size, activation='sigmoid')
 
     def func_api_model(self):
-        x = keras.layers.Input(shape=(1000, 4), dtype="float32")
+        inputs = keras.layers.Input(shape=(1000, 4), dtype="float32")
+
+        x = self.to_kmer(inputs)
+
         for reg_layer, bn_layer, activation_layer in zip(self.reg_layers, self.bn_layers, self.activation_layers):
             x = reg_layer(x)
             x = bn_layer(x)
@@ -1136,10 +1153,11 @@ class CustomRCPS:
         x = self.pool(x)
         x = self.flattener(x)
         outputs = self.dense(x)
-        return outputs
+        model = keras.Model(inputs, outputs)
+        return model
 
     def eager_call(self, inputs):
-        x = inputs
+        x = self.to_kmer(inputs)
         for reg_layer, bn_layer, activation_layer in zip(self.reg_layers, self.bn_layers, self.activation_layers):
             x = reg_layer(x)
             x = bn_layer(x)
@@ -1668,31 +1686,36 @@ if __name__ == '__main__':
         # FULL MODEL
         generator = Generator(binary=True, eager=eager)
         val_generator = Generator(binary=True, eager=eager)
-        model = EquiNetBinary(placeholder_bn=False).func_api_model()
+        model = EquiNetBinary(placeholder_bn=False, kmers=3).func_api_model()
         # model.summary()
-
-        # TEST THE BN UPDATES :  we see that the weights update correctly : everything stays put during inference
-        print()
-        bn_layer = model.layers[2]
-        print(bn_layer.get_weights())
-        print()
-
         model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="mse", metrics=["accuracy"])
         model.fit_generator(generator,
                             validation_data=val_generator,
                             validation_steps=10,
                             epochs=3)
 
-        bn_layer = model.layers[2]
-        print(bn_layer.get_weights())
-        print()
-
-        x = random_one_hot(size=(3, 1000), return_tf=False)
-        out1 = model.predict(x)
-
-        bn_layer = model.layers[2]
-        print(bn_layer.get_weights())
-        print()
+        # TEST THE BN UPDATES :  we see that the weights update correctly : everything stays put during inference
+        # print()
+        # bn_layer = model.layers[2]
+        # print(bn_layer.get_weights())
+        # print()
+        #
+        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001), loss="mse", metrics=["accuracy"])
+        # model.fit_generator(generator,
+        #                     validation_data=val_generator,
+        #                     validation_steps=10,
+        #                     epochs=3)
+        #
+        # bn_layer = model.layers[2]
+        # print(bn_layer.get_weights())
+        # print()
+        #
+        # x = random_one_hot(size=(3, 1000), return_tf=False)
+        # out1 = model.predict(x)
+        #
+        # bn_layer = model.layers[2]
+        # print(bn_layer.get_weights())
+        # print()
 
         # import sys
         # sys.exit()
@@ -1733,10 +1756,9 @@ if __name__ == '__main__':
         #     else:
         #         print(out[:2, :5])
         #     print()
-
-        print()
-        print(bn_layer.momentum)
-        print(bn_layer.get_weights())
+        # print()
+        # print(bn_layer.momentum)
+        # print(bn_layer.get_weights())
 
         # ========= BPNets ===========
 
