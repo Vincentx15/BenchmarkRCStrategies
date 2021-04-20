@@ -1,3 +1,4 @@
+import collections
 import os
 import numpy as np
 import gzip
@@ -323,11 +324,13 @@ class AuRocCallback(keras.callbacks.Callback):
         self.valid_Y = valid_Y
         self.best_auroc_sofar = 0.0
         self.best_weights = None
+        self.last_weights = None
         self.best_epoch_number = 0
 
     def on_epoch_end(self, epoch, logs):
         preds = self.model.predict(self.valid_X)
         auroc = roc_auc_score(y_true=self.valid_Y, y_score=preds)
+        self.last_weights = self.model.get_weights()
         if (auroc > self.best_auroc_sofar):
             self.best_weights = self.model.get_weights()
             self.best_epoch_number = epoch
@@ -433,8 +436,7 @@ def eager_train(model,
 
 
 if __name__ == '__main__':
-    def plot_values(model, epochs_to_train_for=160, TF='CTCF'):
-
+    def plot_values(model, epochs_to_train_for=160, TF='CTCF', seed=1234, one_return=True):
         valid_data_loader = momma_dragonn.data_loaders.hdf5_data_loader.MultimodalAtOnceDataLoader(
             path_to_hdf5=f"data/{TF}/valid_data.hdf5", strip_enclosing_dictionary=True)
         valid_data = valid_data_loader.get_data()
@@ -445,31 +447,78 @@ if __name__ == '__main__':
 
         standard_train_batch_generator = get_generators(TF=TF,
                                                         seq_len=1000,
-                                                        curr_seed=1234,
+                                                        curr_seed=seed,
                                                         is_aug=False)
-        auroc_callback, history, trained_model = train_model(model=model,
-                                                             curr_seed=1234,
-                                                             train_data_loader=None,
-                                                             batch_generator=standard_train_batch_generator,
-                                                             valid_data=valid_data,
-                                                             epochs_to_train_for=epochs_to_train_for,
-                                                             upsampling=True)
-        trained_model.set_weights(auroc_callback.best_weights)
-        a = roc_auc_score(y_true=valid_data.Y, y_score=trained_model.predict(valid_data.X))
-        b = roc_auc_score(y_true=test_data.Y, y_score=trained_model.predict(test_data.X))
-        trained_model.set_weights(auroc_callback.best_weights)
-        c = roc_auc_score(y_true=valid_data.Y, y_score=trained_model.predict(valid_data.X))
-        d = roc_auc_score(y_true=test_data.Y, y_score=trained_model.predict(test_data.X))
-        print(a)
-        print(b)
-        print(c)
-        print(d)
-        print("Validation set AUROC with best-loss early stopping:", a)
-        print("Test set AUROC with best-loss early stopping:", b)
-        print("Validation AUROC at best-auroc early stopping:", c)
-        print("Test set AUROC at best-auroc early stopping:", d)
+        if one_return:
+            auroc_callback, history, trained_model = train_model(model=model,
+                                                                 curr_seed=seed,
+                                                                 train_data_loader=None,
+                                                                 batch_generator=standard_train_batch_generator,
+                                                                 valid_data=valid_data,
+                                                                 epochs_to_train_for=epochs_to_train_for,
+                                                                 upsampling=True)
+            trained_model.set_weights(auroc_callback.best_weights)
+            a = roc_auc_score(y_true=valid_data.Y, y_score=trained_model.predict(valid_data.X))
+            b = roc_auc_score(y_true=test_data.Y, y_score=trained_model.predict(test_data.X))
+            print(a)
+            print(b)
+            print("Validation AUROC at best-auroc early stopping:", a)
+            print("Test set AUROC at best-auroc early stopping:", b)
 
-        return a, b, c, d
+            return a, b
+
+        auroc_callback = AuRocCallback(model=model,
+                                       valid_X=valid_data.X,
+                                       valid_Y=valid_data.Y)
+
+        step_per_epoch = 50
+        epochs_to_try = [5, 10, 20, 40, 80, 160]
+        epochs_results = {}
+        history = History()
+        last_epoch = 0
+        for epoch in epochs_to_try:
+            epochs_to_train_for = epoch - last_epoch
+            last_epoch = epoch
+            model.fit_generator(standard_train_batch_generator,
+                                validation_data=(valid_data.X, valid_data.Y),
+                                epochs=epochs_to_train_for,
+                                steps_per_epoch=step_per_epoch,
+                                callbacks=[auroc_callback, history],
+                                workers=os.cpu_count(),
+                                use_multiprocessing=True
+                                )
+
+            model.set_weights(auroc_callback.best_weights)
+            a = roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X))
+            b = roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X))
+            model.set_weights(auroc_callback.last_weights)
+            epochs_results[epoch] = (a, b)
+        return epochs_results
+
+
+    def test_model(model, logname, aggregatedname, model_name, seed_max=2):
+        aggregated = collections.defaultdict(list)
+        for seed in range(seed_max):
+            dict_res = plot_values(model, one_return=False, seed=seed)
+            with open(logname, 'a') as f:
+                f.write(f'{model_name} with seed={seed}\n')
+                for epoch, values in dict_res.items():
+                    f.write(f'{epoch} {values[0]} {values[1]}\n')
+                f.write(f'\n')
+
+            for epoch, values in dict_res.items():
+                aggregated[epoch].append(values)
+        # Now value is a list of tuples of results, one for each seed.
+        # Let us aggregate it into a mean and std for each
+
+        with open(aggregatedname, 'a') as f:
+            f.write(f'{model_name}\n')
+            for epoch, values in aggregated.items():
+                np_values = np.array(values)
+                mean_value = np.mean(np_values)
+                std_value = np.std(np_values)
+                f.write(f'{epoch} {mean_value} {std_value}\n')
+            f.write(f'\n')
 
 
     parameters = {
@@ -479,10 +528,36 @@ if __name__ == '__main__':
         'strides': 20
     }
 
-    # model = get_reg_model(parameters)
-    # model = get_rc_model(parameters, is_weighted_sum=False)
+    logname = 'logfile_reproduce.txt'
+    with open(logname, 'w') as f:
+        f.write('Log of the experiments results for reproducibility and prior inclusion :\n')
 
-    epochs_to_train_for = 1
+    aggname = 'outfile_reproduce.txt'
+    with open(aggname, 'w') as f:
+        f.write('Experiments results for reproducibility and prior inclusion :\n')
+
+    for k in range(1, 5):
+        model = equinet.CustomRCPS(kmers=k)
+        model = model.func_api_model()
+        model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                      loss="binary_crossentropy", metrics=["accuracy"])
+        model_name = f'RCPS with k={k}'
+        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
+
+    model = get_reg_model(parameters)
+    model_name = f'non equivariant'
+    test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
+
+    for k in range(1, 5):
+        model = equinet.EquiNetBinary(kmers=k)
+        model = model.func_api_model()
+        model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                      loss="binary_crossentropy", metrics=["accuracy"])
+        model_name = f'Equinet with k={k}'
+        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
+
+    """
+    epochs_to_train_for = 160
     outname = 'outfile.txt'
     with open(outname, 'a') as f:
         f.write('Experiments results :\n')
@@ -505,4 +580,5 @@ if __name__ == '__main__':
                       loss="binary_crossentropy", metrics=["accuracy"])
         a, b, c, d = plot_values(model, epochs_to_train_for=epochs_to_train_for)
         with open(outname, 'a') as f:
-            f.write(f'RCPS_{k} {a} {b} {c} {d}\n')
+            f.write(f'Equinet_{k} {a} {b} {c} {d}\n')
+    """
