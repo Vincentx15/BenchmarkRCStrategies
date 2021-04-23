@@ -944,8 +944,8 @@ class ToKmerLayer(Layer):
 class EquiNetBinary:
 
     def __init__(self,
-                 filters=((2, 2), (2, 2), (2, 2), (1, 1)),
-                 kernel_sizes=(5, 5, 7, 7),
+                 filters=((16, 16), (16, 16), (16, 16)),
+                 kernel_sizes=(15, 14, 14),
                  pool_size=40,
                  pool_length=20,
                  out_size=1,
