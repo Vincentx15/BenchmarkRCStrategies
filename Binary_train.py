@@ -528,33 +528,34 @@ if __name__ == '__main__':
         'strides': 20
     }
 
-    logname = 'logfile_reproduce.txt'
+    logname = 'logfile_reproduce_tf.txt'
     with open(logname, 'w') as f:
         f.write('Log of the experiments results for reproducibility and prior inclusion :\n')
 
-    aggname = 'outfile_reproduce.txt'
+    aggname = 'outfile_reproduce_tf.txt'
     with open(aggname, 'w') as f:
         f.write('Experiments results for reproducibility and prior inclusion :\n')
 
-    for k in range(1, 5):
-        model = equinet.CustomRCPS(kmers=k)
-        model = model.func_api_model()
-        model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
-                      loss="binary_crossentropy", metrics=["accuracy"])
-        model_name = f'RCPS with k={k}'
+    for tf in ['MAX', 'SPI1']:
+        for k in range(1, 5):
+            model = equinet.CustomRCPS(kmers=k)
+            model = model.func_api_model()
+            model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                          loss="binary_crossentropy", metrics=["accuracy"])
+            model_name = f'RCPS with k={k} with tf={tf}'
+            test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
+
+        model = get_reg_model(parameters)
+        model_name = f'non equivariant with tf={tf}'
         test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
 
-    model = get_reg_model(parameters)
-    model_name = f'non equivariant'
-    test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
-
-    for k in range(1, 5):
-        model = equinet.EquiNetBinary(kmers=k)
-        model = model.func_api_model()
-        model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
-                      loss="binary_crossentropy", metrics=["accuracy"])
-        model_name = f'Equinet with k={k}'
-        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
+        for k in range(1, 5):
+            model = equinet.EquiNetBinary(kmers=k)
+            model = model.func_api_model()
+            model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                          loss="binary_crossentropy", metrics=["accuracy"])
+            model_name = f'Equinet with k={k} with tf={tf}'
+            test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
 
     """
     epochs_to_train_for = 160

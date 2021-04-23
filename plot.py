@@ -74,8 +74,19 @@ def group_logfile(logfile='logfile_reproduce.txt'):
     # We need to aggregate per seed :
     aggregated = collections.defaultdict(list)
     for key, value in res_dict.items():
-        new_key = key.split('with seed')[0]
+        new_key = key.split(' with seed')[0]
         aggregated[new_key].append(value)
+
+    reference = aggregated['RCPS with k=2']
+    np_reference = np.array((reference))[:,-1]
+    for key, value in aggregated.items():
+        np_values = np.array(value)[:,-1]
+        from scipy.stats import wilcoxon
+        from scipy import stats
+        if not np.allclose(np_reference, np_values):
+            w, p = wilcoxon(np_reference, np_values)
+            t, p2 = stats.ttest_ind(np_reference, np_values)
+            print(key, p, p2)
 
     transformed = {}
     for key, value in aggregated.items():
@@ -87,7 +98,7 @@ def group_logfile(logfile='logfile_reproduce.txt'):
         std = np.std(value, axis=0)
         n_samples = np.sqrt(len(value))
         transformed[key] = mean, std / n_samples
-        print(mean, std / n_samples)
+        # print(mean, std / n_samples)
     return transformed, epochs
 
 
