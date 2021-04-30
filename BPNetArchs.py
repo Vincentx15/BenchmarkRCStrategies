@@ -71,10 +71,19 @@ class MultichannelMultinomialNLL(object):
 
 
 class AbstractProfileModel(object):
-    def __init__(self, dataset, input_seq_len, c_task_weight, p_task_weight,
-                 filters, n_dil_layers, conv1_kernel_size, dil_kernel_size,
-                 outconv_kernel_size, optimizer, weight_decay, lr,
-                 size, kernel_initializer, seed):
+    def __init__(self, dataset,
+                 input_seq_len=1346,
+                 c_task_weight=0,
+                 p_task_weight=1,
+                 filters=64,
+                 n_dil_layers=6,
+                 conv1_kernel_size=21,
+                 dil_kernel_size=3,
+                 outconv_kernel_size=75,
+                 optimizer='Adam',
+                 weight_decay=0.01,
+                 lr=0.001,
+                 kernel_initializer="glorot_uniform"):
         self.dataset = dataset
         self.input_seq_len = input_seq_len
         self.c_task_weight = c_task_weight
@@ -87,10 +96,7 @@ class AbstractProfileModel(object):
         self.optimizer = optimizer
         self.weight_decay = weight_decay
         self.lr = lr
-        self.learning_rate = lr
-        self.size = size
         self.kernel_initializer = kernel_initializer
-        self.seed = seed
 
     def get_embedding_len(self):
         embedding_len = self.input_seq_len
@@ -150,16 +156,13 @@ class AbstractProfileModel(object):
 
 
 class RcBPNetArch(AbstractProfileModel):
-    def __init__(self, is_add, kmers=1, **kwargs):
+    def __init__(self, is_add=True, kmers=1, **kwargs):
         super().__init__(**kwargs)
         self.is_add = is_add
         self.kmers = kmers
 
     def get_keras_model(self):
         from equinet import ToKmerLayer
-        np.random.seed(self.seed)
-        tf.set_random_seed(self.seed)
-
         inp, bias_counts_input, bias_profile_input = self.get_inputs()
         countouttaskname, profileouttaskname = self.get_names()
 
@@ -257,9 +260,6 @@ class SiameseBPNetArch(AbstractProfileModel):
         return layer
 
     def get_keras_model(self):
-        np.random.seed(self.seed)
-        tf.set_random_seed(self.seed)
-
         inp, bias_counts_input, bias_profile_input = self.get_inputs()
         rev_inp = kl.Lambda(lambda x: x[:, ::-1, ::-1])(inp)
 
@@ -372,8 +372,6 @@ class StandardBPNetArch(AbstractProfileModel):
         self.is_add = is_add
 
     def get_keras_model(self):
-        np.random.seed(self.seed)
-        tf.set_random_seed(self.seed)
 
         inp, bias_counts_input, bias_profile_input = self.get_inputs()
         countouttaskname, profileouttaskname = self.get_names()

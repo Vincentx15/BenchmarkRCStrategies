@@ -278,7 +278,7 @@ class SimpleLookup(AbstractSingleNdarrayCoordsToVals):
         return np.array(to_return)
 
 
-def get_generators(TF, seq_len, is_aug, curr_seed):
+def get_generators(TF, seq_len, is_aug, seed):
     inputs_coordstovals = coordbased.coordstovals.fasta.PyfaidxCoordsToVals(
         genome_fasta_path="data/hg19.genome.fa",
         center_size_to_use=seq_len)
@@ -296,7 +296,7 @@ def get_generators(TF, seq_len, is_aug, curr_seed):
         target_proportion_positives=target_proportion_positives,
         batch_size=100,
         shuffle_before_epoch=True,
-        seed=curr_seed)
+        seed=seed)
     coordsbatch_transformer = coordbatchtransformers.ReverseComplementAugmenter() if is_aug else None
 
     train_batch_generator = KerasBatchGenerator(
@@ -442,8 +442,8 @@ if __name__ == '__main__':
         return siamese_model
 
 
-    def plot_values(model, epochs_to_train_for=160, TF='CTCF', seed=1234, one_return=True, is_aug=False,
-                    post_hoc=False):
+    def train_test_model(model, epochs_to_train_for=160, TF='CTCF', seed=1234, one_return=True, is_aug=False,
+                         post_hoc=False):
         valid_data_loader = momma_dragonn.data_loaders.hdf5_data_loader.MultimodalAtOnceDataLoader(
             path_to_hdf5=f"data/{TF}/valid_data.hdf5", strip_enclosing_dictionary=True)
         valid_data = valid_data_loader.get_data()
@@ -454,7 +454,7 @@ if __name__ == '__main__':
 
         standard_train_batch_generator = get_generators(TF=TF,
                                                         seq_len=1000,
-                                                        curr_seed=seed,
+                                                        seed=seed,
                                                         is_aug=is_aug)
         if one_return:
             auroc_callback, history, trained_model = train_model(model=model,
@@ -480,7 +480,9 @@ if __name__ == '__main__':
         auroc_callback = AuRocCallback(model=model,
                                        valid_X=valid_data.X,
                                        valid_Y=valid_data.Y)
-
+        # Each epoch is 50 batches of 100 sequences ie 5000 seq.
+        # CTCF has 37000 foreground sequences and 200742 so a total of 240k sequences.
+        # Looping over all is about 48 epochs.
         step_per_epoch = 50
         epochs_to_try = [5, 10, 20, 40, 80, 160]
         epochs_results = {}
@@ -513,7 +515,7 @@ if __name__ == '__main__':
     def test_model(model, logname, aggregatedname, model_name, seed_max=10, rc_aug=False, post_hoc=False):
         aggregated = collections.defaultdict(list)
         for seed in range(seed_max):
-            dict_res = plot_values(model, one_return=False, seed=seed, is_aug=rc_aug, post_hoc=post_hoc)
+            dict_res = train_test_model(model, one_return=False, seed=seed, is_aug=rc_aug, post_hoc=post_hoc)
             with open(logname, 'a') as f:
                 f.write(f'{model_name} with seed={seed}\n')
                 for epoch, values in dict_res.items():
