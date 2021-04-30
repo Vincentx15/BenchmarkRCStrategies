@@ -290,31 +290,21 @@ def get_generators(TF, seq_len, is_aug, curr_seed):
 
     target_proportion_positives = 1 / 5
 
-    if not is_aug:
-        standard_train_batch_generator = KerasBatchGenerator(
-            coordsbatch_producer=coordbatchproducers.DownsampleNegativesCoordsBatchProducer(
-                pos_bed_file=f"data/{TF}/{TF}_foreground_train.bed.gz",
-                neg_bed_file=f"data/{TF}/{TF}_background_train.bed.gz",
-                target_proportion_positives=target_proportion_positives,
-                batch_size=100,
-                shuffle_before_epoch=True,
-                seed=curr_seed),
-            inputs_coordstovals=inputs_coordstovals,
-            targets_coordstovals=targets_coordstovals)
-        return standard_train_batch_generator
-    else:
-        aug_train_batch_generator = KerasBatchGenerator(
-            coordsbatch_producer=coordbatchproducers.DownsampleNegativesCoordsBatchProducer(
-                pos_bed_file=f"{TF}_foreground_train.bed.gz",
-                neg_bed_file=f"{TF}_background_train.bed.gz",
-                target_proportion_positives=target_proportion_positives,
-                batch_size=100,
-                shuffle_before_epoch=True,
-                seed=curr_seed),
-            inputs_coordstovals=inputs_coordstovals,
-            targets_coordstovals=targets_coordstovals,
-            coordsbatch_transformer=coordbatchtransformers.ReverseComplementAugmenter())
-        return aug_train_batch_generator
+    coords_batch_producer = coordbatchproducers.DownsampleNegativesCoordsBatchProducer(
+        pos_bed_file=f"data/{TF}/{TF}_foreground_train.bed.gz",
+        neg_bed_file=f"data/{TF}/{TF}_background_train.bed.gz",
+        target_proportion_positives=target_proportion_positives,
+        batch_size=100,
+        shuffle_before_epoch=True,
+        seed=curr_seed)
+    coordsbatch_transformer = coordbatchtransformers.ReverseComplementAugmenter() if is_aug else None
+
+    train_batch_generator = KerasBatchGenerator(
+        coordsbatch_producer=coords_batch_producer,
+        inputs_coordstovals=inputs_coordstovals,
+        targets_coordstovals=targets_coordstovals,
+        coordsbatch_transformer=coordsbatch_transformer)
+    return train_batch_generator
 
 
 class AuRocCallback(keras.callbacks.Callback):
@@ -436,7 +426,24 @@ def eager_train(model,
 
 
 if __name__ == '__main__':
-    def plot_values(model, epochs_to_train_for=160, TF='CTCF', seed=1234, one_return=True):
+    def post_hoc_from_model(trained_model, seq_len=1000):
+        binary_model_getlogits = keras.models.Model(inputs=trained_model.inputs,
+                                                    outputs=trained_model.layers[-2].output)
+
+        fwd_sequence_input = keras.layers.Input(shape=(seq_len, 4))
+        rev_sequence_input = keras.layers.Lambda(function=lambda x: x[:, ::-1, ::-1])(fwd_sequence_input)
+        fwd_logit_output = binary_model_getlogits(fwd_sequence_input)
+        rev_logit_output = binary_model_getlogits(rev_sequence_input)
+        average_logits = keras.layers.Average()([fwd_logit_output, rev_logit_output])
+        sigmoid_out = keras.layers.Activation("sigmoid")(average_logits)
+
+        siamese_model = keras.models.Model(inputs=[fwd_sequence_input],
+                                           outputs=[sigmoid_out])
+        return siamese_model
+
+
+    def plot_values(model, epochs_to_train_for=160, TF='CTCF', seed=1234, one_return=True, is_aug=False,
+                    post_hoc=False):
         valid_data_loader = momma_dragonn.data_loaders.hdf5_data_loader.MultimodalAtOnceDataLoader(
             path_to_hdf5=f"data/{TF}/valid_data.hdf5", strip_enclosing_dictionary=True)
         valid_data = valid_data_loader.get_data()
@@ -448,7 +455,7 @@ if __name__ == '__main__':
         standard_train_batch_generator = get_generators(TF=TF,
                                                         seq_len=1000,
                                                         curr_seed=seed,
-                                                        is_aug=False)
+                                                        is_aug=is_aug)
         if one_return:
             auroc_callback, history, trained_model = train_model(model=model,
                                                                  curr_seed=seed,
@@ -458,6 +465,9 @@ if __name__ == '__main__':
                                                                  epochs_to_train_for=epochs_to_train_for,
                                                                  upsampling=True)
             trained_model.set_weights(auroc_callback.best_weights)
+            if post_hoc:
+                trained_model = post_hoc_from_model(trained_model)
+
             a = roc_auc_score(y_true=valid_data.Y, y_score=trained_model.predict(valid_data.X))
             b = roc_auc_score(y_true=test_data.Y, y_score=trained_model.predict(test_data.X))
             print(a)
@@ -487,19 +497,23 @@ if __name__ == '__main__':
                                 workers=os.cpu_count(),
                                 use_multiprocessing=True
                                 )
-
             model.set_weights(auroc_callback.best_weights)
-            a = roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X))
-            b = roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X))
+            if post_hoc:
+                inference_model = post_hoc_from_model(model)
+                a = roc_auc_score(y_true=valid_data.Y, y_score=inference_model.predict(valid_data.X))
+                b = roc_auc_score(y_true=test_data.Y, y_score=inference_model.predict(test_data.X))
+            else:
+                a = roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X))
+                b = roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X))
             model.set_weights(auroc_callback.last_weights)
             epochs_results[epoch] = (a, b)
         return epochs_results
 
 
-    def test_model(model, logname, aggregatedname, model_name, seed_max=2):
+    def test_model(model, logname, aggregatedname, model_name, seed_max=10, rc_aug=False, post_hoc=False):
         aggregated = collections.defaultdict(list)
         for seed in range(seed_max):
-            dict_res = plot_values(model, one_return=False, seed=seed)
+            dict_res = plot_values(model, one_return=False, seed=seed, is_aug=rc_aug, post_hoc=post_hoc)
             with open(logname, 'a') as f:
                 f.write(f'{model_name} with seed={seed}\n')
                 for epoch, values in dict_res.items():
@@ -510,7 +524,6 @@ if __name__ == '__main__':
                 aggregated[epoch].append(values)
         # Now value is a list of tuples of results, one for each seed.
         # Let us aggregate it into a mean and std for each
-
         with open(aggregatedname, 'a') as f:
             f.write(f'{model_name}\n')
             for epoch, values in aggregated.items():
@@ -528,15 +541,42 @@ if __name__ == '__main__':
         'strides': 20
     }
 
-    logname = 'logfile_reproduce_tf.txt'
+    logname = 'logfile_reproduce_posthoc.txt'
     with open(logname, 'w') as f:
         f.write('Log of the experiments results for reproducibility and prior inclusion :\n')
 
-    aggname = 'outfile_reproduce_tf.txt'
+    aggname = 'outfile_reproduce_posthoc.txt'
     with open(aggname, 'w') as f:
         f.write('Experiments results for reproducibility and prior inclusion :\n')
 
-    for tf in ['MAX', 'SPI1']:
+    for tf in ['MAX', 'SPI1', 'CTCF']:
+        # Make the classical models
+        model = get_reg_model(parameters)
+        model_name = f'rc_post_hoc with tf={tf}'
+        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, rc_aug=True, post_hoc=True)
+
+    """
+    logname = 'logfile_reproduce_all.txt'
+    with open(logname, 'w') as f:
+        f.write('Log of the experiments results for reproducibility and prior inclusion :\n')
+
+    aggname = 'outfile_reproduce_all.txt'
+    with open(aggname, 'w') as f:
+        f.write('Experiments results for reproducibility and prior inclusion :\n')
+
+    for tf in ['MAX', 'SPI1', 'CTCF']:
+        
+        # Make the classical models
+        model = get_reg_model(parameters)
+        model_name = f'non equivariant with tf={tf}'
+        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
+        
+        # Make the classical models with post_hoc
+        model = get_reg_model(parameters)
+        model_name = f'rc_post_hoc with tf={tf}'
+        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, rc_aug=True, post_hoc=True)
+        
+        # Get the RCPS
         for k in range(1, 5):
             model = equinet.CustomRCPS(kmers=k)
             model = model.func_api_model()
@@ -545,17 +585,44 @@ if __name__ == '__main__':
             model_name = f'RCPS with k={k} with tf={tf}'
             test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
 
-        model = get_reg_model(parameters)
-        model_name = f'non equivariant with tf={tf}'
-        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
-
-        for k in range(1, 5):
-            model = equinet.EquiNetBinary(kmers=k)
+            # Get the Equinet with different blends of a_n, b_n
+            model = equinet.EquiNetBinary(kmers=k, filters=((16, 16), (16, 16), (16, 16)))
             model = model.func_api_model()
             model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
                           loss="binary_crossentropy", metrics=["accuracy"])
-            model_name = f'Equinet with k={k} with tf={tf}'
+            model_name = f'Equinet 50a_n with k={k} with tf={tf}'
             test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
+
+            # Get the Equinet with different blends of a_n, b_n
+            model = equinet.EquiNetBinary(kmers=k, filters=((32, 0), (32, 0), (32, 0)))
+            model = model.func_api_model()
+            model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                          loss="binary_crossentropy", metrics=["accuracy"])
+            model_name = f'Equinet 100a_n with k={k} with tf={tf}'
+            test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
+
+            model = equinet.EquiNetBinary(kmers=k, filters=((24, 8), (24, 8), (24, 8)))
+            model = model.func_api_model()
+            model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                          loss="binary_crossentropy", metrics=["accuracy"])
+            model_name = f'Equinet 75a_n with k={k} with tf={tf}'
+            test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
+
+            model = equinet.EquiNetBinary(kmers=k, filters=((8, 24), (8, 24), (8, 24)))
+            model = model.func_api_model()
+            model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                          loss="binary_crossentropy", metrics=["accuracy"])
+            model_name = f'Equinet 25a_n with k={k} with tf={tf}'
+            test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
+
+            model = equinet.EquiNetBinary(kmers=k, filters=((0, 32), (0, 32), (0, 32)))
+            model = model.func_api_model()
+            model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                          loss="binary_crossentropy", metrics=["accuracy"])
+            model_name = f'Equinet 0a_n k={k} with tf={tf}'
+            test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
+
+    """
 
     """
     epochs_to_train_for = 160

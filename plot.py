@@ -77,10 +77,10 @@ def group_logfile(logfile='logfile_reproduce.txt'):
         new_key = key.split(' with seed')[0]
         aggregated[new_key].append(value)
 
-    reference = aggregated['RCPS with k=2']
-    np_reference = np.array((reference))[:,-1]
+    reference = aggregated['Equinet with k=3 with tf=SPI1']
+    np_reference = np.array((reference))[:, -1]
     for key, value in aggregated.items():
-        np_values = np.array(value)[:,-1]
+        np_values = np.array(value)[:, -1]
         from scipy.stats import wilcoxon
         from scipy import stats
         if not np.allclose(np_reference, np_values):
@@ -90,6 +90,8 @@ def group_logfile(logfile='logfile_reproduce.txt'):
 
     transformed = {}
     for key, value in aggregated.items():
+        if 'MAX' in key:
+            continue
         value = np.array(value)
         # mean, std = np.mean(value, axis=(0,1)), np.std(value, axis=(0,1))/np.sqrt(len(value))
         # transformed[key] = mean, std
@@ -108,9 +110,9 @@ def plot_res_dict(res_dict, epochs):
         means, stds = value
         stds = stds
         ax.plot(epochs, means, lw=2, label=key)
-        min_bound = np.max((means - stds, 0.965 * np.ones_like(means)), axis=0)
-        max_bound = np.min((means + stds, 0.99 * np.ones_like(means)), axis=0)
-        ax.fill_between(epochs, min_bound, max_bound, alpha=0.5)
+        # min_bound = np.max((means - stds, 0.965 * np.ones_like(means)), axis=0)
+        # max_bound = np.min((means + stds, 0.995 * np.ones_like(means)), axis=0)
+        # ax.fill_between(epochs, min_bound, max_bound, alpha=0.5)
     ax.set_title('Auroc with different models')
     ax.legend(loc='lower right')
     ax.set_xlabel('Epochs')
@@ -122,6 +124,25 @@ def plot_res_dict(res_dict, epochs):
 # res_dict, epochs = group_aggregated()
 # plot_res_dict(res_dict, epochs)
 
-res_dict, epochs = group_logfile()
-plot_res_dict(res_dict, epochs)
+# res_dict, epochs = group_logfile(logfile='logfile_reproduce_tf.txt')
+# res_dict, epochs = group_logfile(logfile='results_archives/temp_logfile_all.txt')
+# plot_res_dict(res_dict, epochs)
 # print(res_dict)
+
+def fix_logfile_ctcf(logfile='logfile_reproduce.txt', logfile_fixed='logfile_reproduce_fixed.txt'):
+    """
+    Just add the with tf=CTCF keyword to the original logfile
+    """
+    with open(logfile, 'r') as f:
+        lines = f.readlines()
+    with open(logfile_fixed, 'w') as f:
+        for line in lines:
+            splits = line.split('with seed=')
+            if len(splits) == 1:
+                f.write(line)
+            else:
+                newline = ''.join([splits[0], 'with tf=CTCF with seed=', splits[1]])
+                f.write(newline)
+
+
+fix_logfile_ctcf()
