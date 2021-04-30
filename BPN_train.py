@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 import keras
+import numpy as np
 from keras.callbacks import History
 from keras.models import load_model
 
@@ -9,6 +10,7 @@ from keras_genomics.layers.convolutional import RevCompConv1D
 from BPNetArchs import RcBPNetArch
 from RunBPNetArchs import get_generators, get_test_values
 
+import collections
 from equinet import *
 from equinet import EquiNetBP
 
@@ -69,18 +71,49 @@ def train_test_model(model, dataset, seed, epochs=80, seq_len=1346, out_pred_len
     return jsd, pears, spear, mse
 
 
+def test_BPN_model(model, logname, aggregatedname, dataset, model_name=None, seed_max=10, is_aug=False):
+    aggregated = list()
+    for seed in range(seed_max):
+        jsd, pears, spear, mse = train_test_model(model=model,
+                                                  model_name=model_name,
+                                                  dataset=dataset,
+                                                  seed=seed,
+                                                  is_aug=is_aug)
+        aggregated.append((jsd, pears, spear, mse))
+        with open(logname, 'a') as f:
+            f.write(f'{model_name} with seed={seed}\n')
+            f.write(f'{jsd} {pears} {spear} {mse}\n')
+            f.write(f'\n')
+
+    # Now value is a list of tuples of results, one for each seed.
+    # Let us aggregate it into a mean and std for each
+    with open(aggregatedname, 'a') as f:
+        f.write(f'{model_name}\n')
+        aggregated = np.array(aggregated)
+        jsd, pears, spear, mse = np.mean(aggregated, axis=0)
+        f.write(f'{jsd} {pears} {spear} {mse}\n')
+        f.write(f'\n')
+
+
 if __name__ == '__main__':
-    dataset = 'OCT4'
-    MODEL_NAME = 'equinet_oct4'
+    pass
 
-    seq_len = 1346
-    out_pred_len = 1000
-    epochs_to_train_for = 80
-    seed = 0
-    np.random.seed(seed)
-    tf.set_random_seed(seed)
+    first_seed = 0
+    np.random.seed(first_seed)
+    tf.set_random_seed(first_seed)
 
-    rcps_model = RcBPNetArch(dataset=dataset).get_keras_model()
-    equinet_model = EquiNetBP(dataset=dataset).get_keras_model()
-    jsd, pears, spear, mse = train_test_model(equinet_model, model_name='equinet_oct4', dataset=dataset, seed=seed,
-                                              is_aug=False)
+    logname = 'logfile_bpn_posthoc.txt'
+    with open(logname, 'w') as f:
+        f.write('Log of the experiments on BPN :\n')
+
+    aggname = 'outfile_bpn_posthoc.txt'
+    with open(aggname, 'w') as f:
+        f.write('Experiments results for BPN :\n')
+
+    for dataset in ['KLF4', 'NANOG', 'SOX2', 'OCT4']:
+        model_name = f'rc_post_hoc with dataset={dataset}'
+        equinet_model = EquiNetBP(dataset=dataset).get_keras_model()
+        # jsd, pears, spear, mse = train_test_model(equinet_model, model_name='equinet_oct4', dataset=dataset,
+        # seed=seed, is_aug=False)
+        test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
+                       logname=logname, aggregatedname=aggname)
