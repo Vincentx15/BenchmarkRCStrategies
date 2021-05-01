@@ -7,20 +7,9 @@ from sklearn.metrics import roc_auc_score
 
 import tensorflow as tf
 
-# tf.enable_eager_execution()
-
 import keras
-from keras import backend as K
-from keras.layers.core import Dropout
-from keras.layers.core import Flatten
 from keras.callbacks import History
-from keras.engine import Layer
-from keras.models import Sequential
-import keras.layers as kl
-from keras.engine.base_layer import InputSpec
-from keras import initializers
 
-from keras_genomics.layers import RevCompConv1D
 import momma_dragonn
 from seqdataloader.batchproducers import coordbased
 from seqdataloader.batchproducers.coordbased import coordstovals
@@ -38,8 +27,7 @@ from seqdataloader.batchproducers.coordbased import coordbatchtransformers
 # from seqdataloader.batchproducers.coordbased.coordbatchtransformers import AbstractCoordBatchTransformer
 # from seqdataloader.batchproducers.coordbased.coordbatchtransformers import get_revcomp
 
-from BinaryArchs import get_rc_model, get_reg_model
-import equinet
+from BinaryArchs import get_rc_model, get_reg_model, EquiNetBinary, CustomRCPS
 
 
 def apply_mask(tomask, mask):
@@ -278,6 +266,45 @@ class SimpleLookup(AbstractSingleNdarrayCoordsToVals):
         return np.array(to_return)
 
 
+class AuRocNoCallback():
+    def __init__(self, model, valid_X, valid_Y):
+        self.model = model
+        self.valid_X = valid_X
+        self.valid_Y = valid_Y
+        self.best_auroc_sofar = 0.0
+        self.best_weights = None
+        self.best_epoch_number = 0
+
+    def on_epoch_end(self, epoch):
+        preds = self.model.predict(self.valid_X)
+        auroc = roc_auc_score(y_true=self.valid_Y, y_score=preds)
+        if auroc > self.best_auroc_sofar:
+            self.best_weights = self.model.get_weights()
+            self.best_epoch_number = epoch
+            self.best_auroc_sofar = auroc
+        return auroc
+
+
+class AuRocCallback(keras.callbacks.Callback):
+    def __init__(self, model, valid_X, valid_Y):
+        self.model = model
+        self.valid_X = valid_X
+        self.valid_Y = valid_Y
+        self.best_auroc_sofar = 0.0
+        self.best_weights = None
+        self.last_weights = None
+        self.best_epoch_number = 0
+
+    def on_epoch_end(self, epoch, logs):
+        preds = self.model.predict(self.valid_X)
+        auroc = roc_auc_score(y_true=self.valid_Y, y_score=preds)
+        self.last_weights = self.model.get_weights()
+        if (auroc > self.best_auroc_sofar):
+            self.best_weights = self.model.get_weights()
+            self.best_epoch_number = epoch
+            self.best_auroc_sofar = auroc
+
+
 def get_generators(TF, seq_len, is_aug, seed):
     inputs_coordstovals = coordbased.coordstovals.fasta.PyfaidxCoordsToVals(
         genome_fasta_path="data/hg19.genome.fa",
@@ -305,26 +332,6 @@ def get_generators(TF, seq_len, is_aug, seed):
         targets_coordstovals=targets_coordstovals,
         coordsbatch_transformer=coordsbatch_transformer)
     return train_batch_generator
-
-
-class AuRocCallback(keras.callbacks.Callback):
-    def __init__(self, model, valid_X, valid_Y):
-        self.model = model
-        self.valid_X = valid_X
-        self.valid_Y = valid_Y
-        self.best_auroc_sofar = 0.0
-        self.best_weights = None
-        self.last_weights = None
-        self.best_epoch_number = 0
-
-    def on_epoch_end(self, epoch, logs):
-        preds = self.model.predict(self.valid_X)
-        auroc = roc_auc_score(y_true=self.valid_Y, y_score=preds)
-        self.last_weights = self.model.get_weights()
-        if (auroc > self.best_auroc_sofar):
-            self.best_weights = self.model.get_weights()
-            self.best_epoch_number = epoch
-            self.best_auroc_sofar = auroc
 
 
 def train_model(model, curr_seed, train_generator,
@@ -360,66 +367,6 @@ def train_model(model, curr_seed, train_generator,
                                            use_multiprocessing=True
                                            )
         return auroc_callback, history, model
-
-
-class AuRocNoCallback():
-    def __init__(self, model, valid_X, valid_Y):
-        self.model = model
-        self.valid_X = valid_X
-        self.valid_Y = valid_Y
-        self.best_auroc_sofar = 0.0
-        self.best_weights = None
-        self.best_epoch_number = 0
-
-    def on_epoch_end(self, epoch):
-        preds = self.model.predict(self.valid_X)
-        auroc = roc_auc_score(y_true=self.valid_Y, y_score=preds)
-        if auroc > self.best_auroc_sofar:
-            self.best_weights = self.model.get_weights()
-            self.best_epoch_number = epoch
-            self.best_auroc_sofar = auroc
-        return auroc
-
-
-def eager_train_step(model, inputs, target,
-                     optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
-                     loss_fn=tf.keras.losses.binary_crossentropy,
-                     metrics="accuracy"):
-    with tf.GradientTape() as tape:
-        pred = model(inputs)
-        loss = loss_fn(target, pred)
-        grads = tape.gradient(loss, model.trainable_weights)
-
-    optimizer.apply_gradients(zip(grads, model.trainable_weights))
-    return loss
-
-
-def eager_train(model,
-                train_dataset,
-                validation_object,
-                optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
-                loss_fn=tf.keras.losses.MeanSquaredError(),
-                metrics="accuracy",
-                epochs_to_train_for=10):
-    """
-    Model : a keras model to be run on eager
-    train_dataset : a tf.data
-    validation_object : an instance of AuRocNoCallback
-    """
-    # total_batch = len(train_dataset)
-    total_batch = 10
-    for epoch in range(epochs_to_train_for):
-        for batch_idx, (batch_in, batch_out) in enumerate(train_dataset):
-            loss = eager_train_step(model,
-                                    inputs=batch_in,
-                                    target=batch_out,
-                                    optimizer=optimizer,
-                                    loss_fn=loss_fn,
-                                    metrics=metrics)
-            print(loss.numpy().item(), batch_idx, total_batch)
-            break
-        # auroc = validation_object.on_epoch_end(epoch=epoch)
-        # print(auroc)
 
 
 if __name__ == '__main__':
@@ -539,21 +486,6 @@ if __name__ == '__main__':
         'strides': 20
     }
 
-    logname = 'logfile_reproduce_posthoc.txt'
-    with open(logname, 'w') as f:
-        f.write('Log of the experiments results for reproducibility and prior inclusion :\n')
-
-    aggname = 'outfile_reproduce_posthoc.txt'
-    with open(aggname, 'w') as f:
-        f.write('Experiments results for reproducibility and prior inclusion :\n')
-
-    for tf in ['MAX', 'SPI1', 'CTCF']:
-        # Make the classical models
-        model = get_reg_model(parameters)
-        model_name = f'rc_post_hoc with tf={tf}'
-        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, rc_aug=True, post_hoc=True)
-
-    """
     logname = 'logfile_reproduce_all.txt'
     with open(logname, 'w') as f:
         f.write('Log of the experiments results for reproducibility and prior inclusion :\n')
@@ -563,20 +495,20 @@ if __name__ == '__main__':
         f.write('Experiments results for reproducibility and prior inclusion :\n')
 
     for tf in ['MAX', 'SPI1', 'CTCF']:
-        
+
         # Make the classical models
         model = get_reg_model(parameters)
         model_name = f'non equivariant with tf={tf}'
         test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
-        
+
         # Make the classical models with post_hoc
         model = get_reg_model(parameters)
         model_name = f'rc_post_hoc with tf={tf}'
         test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, rc_aug=True, post_hoc=True)
-        
+
         # Get the RCPS
         for k in range(1, 5):
-            model = equinet.CustomRCPS(kmers=k)
+            model = CustomRCPS(kmers=k)
             model = model.func_api_model()
             model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
                           loss="binary_crossentropy", metrics=["accuracy"])
@@ -584,7 +516,7 @@ if __name__ == '__main__':
             test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
 
             # Get the Equinet with different blends of a_n, b_n
-            model = equinet.EquiNetBinary(kmers=k, filters=((16, 16), (16, 16), (16, 16)))
+            model = EquiNetBinary(kmers=k, filters=((16, 16), (16, 16), (16, 16)))
             model = model.func_api_model()
             model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
                           loss="binary_crossentropy", metrics=["accuracy"])
@@ -592,59 +524,30 @@ if __name__ == '__main__':
             test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
 
             # Get the Equinet with different blends of a_n, b_n
-            model = equinet.EquiNetBinary(kmers=k, filters=((32, 0), (32, 0), (32, 0)))
+            model = EquiNetBinary(kmers=k, filters=((32, 0), (32, 0), (32, 0)))
             model = model.func_api_model()
             model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
                           loss="binary_crossentropy", metrics=["accuracy"])
             model_name = f'Equinet 100a_n with k={k} with tf={tf}'
             test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
 
-            model = equinet.EquiNetBinary(kmers=k, filters=((24, 8), (24, 8), (24, 8)))
+            model = EquiNetBinary(kmers=k, filters=((24, 8), (24, 8), (24, 8)))
             model = model.func_api_model()
             model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
                           loss="binary_crossentropy", metrics=["accuracy"])
             model_name = f'Equinet 75a_n with k={k} with tf={tf}'
             test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
 
-            model = equinet.EquiNetBinary(kmers=k, filters=((8, 24), (8, 24), (8, 24)))
+            model = EquiNetBinary(kmers=k, filters=((8, 24), (8, 24), (8, 24)))
             model = model.func_api_model()
             model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
                           loss="binary_crossentropy", metrics=["accuracy"])
             model_name = f'Equinet 25a_n with k={k} with tf={tf}'
             test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
 
-            model = equinet.EquiNetBinary(kmers=k, filters=((0, 32), (0, 32), (0, 32)))
+            model = EquiNetBinary(kmers=k, filters=((0, 32), (0, 32), (0, 32)))
             model = model.func_api_model()
             model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
                           loss="binary_crossentropy", metrics=["accuracy"])
             model_name = f'Equinet 0a_n k={k} with tf={tf}'
             test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name)
-
-    """
-
-    """
-    epochs_to_train_for = 160
-    outname = 'outfile.txt'
-    with open(outname, 'a') as f:
-        f.write('Experiments results :\n')
-
-    for k in range(1, 4):
-        print(f'RCPS trained with K={k}')
-        model = equinet.CustomRCPS(kmers=k)
-        model = model.func_api_model()
-        model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
-                      loss="binary_crossentropy", metrics=["accuracy"])
-        a, b, c, d = plot_values(model, epochs_to_train_for=epochs_to_train_for)
-        with open(outname, 'a') as f:
-            f.write(f'RCPS_{k} {a} {b} {c} {d}\n')
-
-    for k in range(1, 4):
-        print(f'Equinet trained with K={k}')
-        model = equinet.EquiNetBinary(filters=[(16, 16), (16, 16), (16, 16)], kernel_sizes=[15, 14, 14], kmers=k)
-        model = model.func_api_model()
-        model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
-                      loss="binary_crossentropy", metrics=["accuracy"])
-        a, b, c, d = plot_values(model, epochs_to_train_for=epochs_to_train_for)
-        with open(outname, 'a') as f:
-            f.write(f'Equinet_{k} {a} {b} {c} {d}\n')
-    """

@@ -631,3 +631,29 @@ class EquiNetBP(kl.Layer):
         profile_out = self.last(concatenated)
 
         return count_out, profile_out
+
+
+if __name__ == '__main__':
+
+    import tensorflow as tf
+    from equinet import BPNGenerator
+
+    eager = False
+
+    if eager:
+        tf.enable_eager_execution()
+
+        rc_model = RcBPNetArch(dataset='SOX2').get_keras_model()
+        print(rc_model.summary())
+        rc_model = EquiNetBP(dataset='SOX2', kmers=4).get_keras_model()
+        print(rc_model.summary())
+        generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager, length=3)
+        rc_model.fit_generator(generator)
+
+    else:
+        pass
+        generator = BPNGenerator(inlen=1346, outfeat=2, outlen=1000, eager=eager, bs=2)
+        inputs = next(iter(generator))
+        a, b, c = inputs[0].values()
+        rc_model = EquiNetBP(dataset='SOX2')
+        rc_model.eager_call(a, b, c)
