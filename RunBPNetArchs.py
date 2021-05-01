@@ -1,3 +1,9 @@
+import os
+
+import numpy as np
+import scipy
+from scipy.special import softmax
+
 from seqdataloader.batchproducers.coordbased.coordbatchproducers import SimpleCoordsBatchProducer
 from seqdataloader.batchproducers.coordbased import coordstovals
 from seqdataloader.batchproducers import coordbased
@@ -6,19 +12,18 @@ from seqdataloader.batchproducers.coordbased import coordbatchtransformers
 from seqdataloader.batchproducers.coordbased.core import Coordinates, KerasBatchGenerator, apply_mask
 from seqdataloader.batchproducers.coordbased.coordbatchtransformers import AbstractCoordBatchTransformer
 from seqdataloader.batchproducers.coordbased.coordbatchtransformers import get_revcomp
-import numpy as np
 
-import tensorflow as tf
 import keras
-import keras.layers as kl
-from keras import backend as K
-from keras.engine import Layer
-from keras.engine.base_layer import InputSpec
-from keras.callbacks import History
 
-import scipy
-from scipy.special import softmax
-import os
+
+class GeneralReverseComplement(AbstractCoordBatchTransformer):
+    def __call__(self, coords):
+        return [get_revcomp(x) for x in coords]
+
+
+class RevcompTackedOnSimpleCoordsBatchProducer(SimpleCoordsBatchProducer):
+    def _get_coordslist(self):
+        return [x for x in self.bed_file.coords_list] + [get_revcomp(x) for x in self.bed_file.coords_list]
 
 
 def get_inputs_and_targets_coordstoval(dataset, seq_len, out_pred_len):
@@ -48,16 +53,6 @@ def get_inputs_and_targets_coordstoval(dataset, seq_len, out_pred_len):
         ]
     )
     return inputs_coordstovals, targets_coordstovals
-
-
-class GeneralReverseComplement(AbstractCoordBatchTransformer):
-    def __call__(self, coords):
-        return [get_revcomp(x) for x in coords]
-
-
-class RevcompTackedOnSimpleCoordsBatchProducer(SimpleCoordsBatchProducer):
-    def _get_coordslist(self):
-        return [x for x in self.bed_file.coords_list] + [get_revcomp(x) for x in self.bed_file.coords_list]
 
 
 def get_train_generator(dataset, inputs_coordstovals, targets_coordstovals, seed, is_aug=False):
@@ -376,12 +371,53 @@ def profile_jsd(true_prof_probs, pred_prof_probs, jsd_smooth_kernel_sigma):
     return np.mean(jsd, axis=-1)  # Average over strands
 
 
-def get_test_values(model, test_generator, dataset):
+def post_hoc_from_model_BPN(model):
+    # Let's create the model
+    # Define the inputs
+    fwd_sequence_input = keras.models.Input(shape=(1346, 4))
+    fwd_patchcap_logcount = keras.models.Input(shape=(2,))
+    fwd_patchcap_profile = keras.models.Input(shape=(1000, 2))
+
+    # RevComp input
+    rev_sequence_input = keras.layers.Lambda(lambda x: x[:, ::-1, ::-1])(fwd_sequence_input)
+    rev_patchcap_logcount = keras.layers.Lambda(lambda x: x[:, ::-1])(fwd_patchcap_logcount)
+    # note that last axis is NOT fwd vs reverse strand, but different smoothing levels
+    # that's why we only flip the middle axis
+    rev_patchcap_profile = keras.layers.Lambda(lambda x: x[:, ::-1])(fwd_patchcap_profile)
+
+    # Run the model on the original fwd inputs
+    fwd_logcount, fwd_profile = model(
+        [fwd_sequence_input, fwd_patchcap_logcount, fwd_patchcap_profile])
+
+    # Run the original model on the reverse inputs
+    rev_logcount, rev_profile = model(
+        [rev_sequence_input, rev_patchcap_logcount, rev_patchcap_profile])
+
+    # Reverse complement rev_logcount and rev_profile to be compatible with fwd
+    revcompd_rev_logcount = keras.layers.Lambda(lambda x: x[:, ::-1])(rev_logcount)
+    revcompd_rev_profile = keras.layers.Lambda(lambda x: x[:, ::-1, ::-1])(rev_profile)
+
+    # Average the two
+    avg_logcount = keras.layers.Average()([fwd_logcount, revcompd_rev_logcount])
+    avg_profile = keras.layers.Average()([fwd_profile, revcompd_rev_profile])
+
+    # Create a model that goes from the inputs to the averaged output
+    post_hoc_model = keras.models.Model(inputs=[fwd_sequence_input,
+                                                fwd_patchcap_logcount,
+                                                fwd_patchcap_profile],
+                                        outputs=[avg_logcount, avg_profile])
+    return post_hoc_model
+
+
+def get_test_values(model, test_generator, dataset, post_hoc=False):
     preds_profile = []
     labels_profile = []
+
+    trained_model = post_hoc_from_model_BPN(model) if post_hoc else model
+
     for batch_idx in range(len(test_generator)):
         batch_inputs, batch_labels = test_generator[batch_idx]
-        test_preds = model.predict(batch_inputs)
+        test_preds = trained_model.predict(batch_inputs)
         preds_profile.extend(softmax(test_preds[1], axis=1))
         labels_profile.extend(batch_labels['CHIPNexus.%s.profile' % dataset])
     preds_profile = np.array(preds_profile)[:, None, :, :]

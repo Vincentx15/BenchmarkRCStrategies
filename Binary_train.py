@@ -327,10 +327,15 @@ class AuRocCallback(keras.callbacks.Callback):
             self.best_auroc_sofar = auroc
 
 
-def train_model(model, curr_seed, train_data_loader, batch_generator,
+def train_model(model, curr_seed, train_generator,
                 valid_data, epochs_to_train_for, upsampling):
     np.random.seed(curr_seed)
     tf.set_random_seed(curr_seed)
+
+    auroc_callback = AuRocCallback(model=model,
+                                   valid_X=valid_data.X,
+                                   valid_Y=valid_data.Y)
+    history = History()
 
     if not upsampling:
         early_stopping_callback = keras.callbacks.EarlyStopping(
@@ -338,11 +343,7 @@ def train_model(model, curr_seed, train_data_loader, batch_generator,
             patience=epochs_to_train_for,
             restore_best_weights=True)
 
-        auroc_callback = AuRocCallback(model=model,
-                                       valid_X=valid_data.X,
-                                       valid_Y=valid_data.Y)
-        history = History()
-        loss_history = model.fit_generator(train_data_loader.get_batch_generator(),
+        loss_history = model.fit_generator(train_generator,
                                            validation_data=(valid_data.X, valid_data.Y),
                                            epochs=epochs_to_train_for,
                                            steps_per_epoch=50,
@@ -350,11 +351,7 @@ def train_model(model, curr_seed, train_data_loader, batch_generator,
                                            callbacks=[auroc_callback, early_stopping_callback, history])
         return early_stopping_callback, auroc_callback, history, model
     else:
-        auroc_callback = AuRocCallback(model=model,
-                                       valid_X=valid_data.X,
-                                       valid_Y=valid_data.Y)
-        history = History()
-        loss_history = model.fit_generator(batch_generator,
+        loss_history = model.fit_generator(train_generator,
                                            validation_data=(valid_data.X, valid_data.Y),
                                            epochs=epochs_to_train_for,
                                            steps_per_epoch=50,
@@ -459,8 +456,7 @@ if __name__ == '__main__':
         if one_return:
             auroc_callback, history, trained_model = train_model(model=model,
                                                                  curr_seed=seed,
-                                                                 train_data_loader=None,
-                                                                 batch_generator=standard_train_batch_generator,
+                                                                 train_generator=standard_train_batch_generator,
                                                                  valid_data=valid_data,
                                                                  epochs_to_train_for=epochs_to_train_for,
                                                                  upsampling=True)
