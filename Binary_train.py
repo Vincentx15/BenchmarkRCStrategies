@@ -16,6 +16,7 @@ from seqdataloader.batchproducers.coordbased import coordbatchtransformers
 from BinaryArchs import get_reg_model, EquiNetBinary, CustomRCPS
 from RunBinaryArchs import SimpleLookup, KerasBatchGenerator, AuRocCallback
 
+
 def get_generators(TF, seq_len, is_aug, seed):
     inputs_coordstovals = coordbased.coordstovals.fasta.PyfaidxCoordsToVals(
         genome_fasta_path="data/hg19.genome.fa",
@@ -45,10 +46,8 @@ def get_generators(TF, seq_len, is_aug, seed):
     return train_batch_generator
 
 
-def train_model(model, curr_seed, train_generator,
+def train_model(model, train_generator,
                 valid_data, epochs_to_train_for, upsampling):
-    np.random.seed(curr_seed)
-    tf.set_random_seed(curr_seed)
 
     auroc_callback = AuRocCallback(model=model,
                                    valid_X=valid_data.X,
@@ -112,7 +111,6 @@ def train_test_model(model, epochs_to_train_for=160, TF='CTCF', seed=1234, one_r
                                                     is_aug=is_aug)
     if one_return:
         auroc_callback, history, trained_model = train_model(model=model,
-                                                             curr_seed=seed,
                                                              train_generator=standard_train_batch_generator,
                                                              valid_data=valid_data,
                                                              epochs_to_train_for=epochs_to_train_for,

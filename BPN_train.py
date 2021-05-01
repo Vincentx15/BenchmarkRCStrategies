@@ -32,19 +32,14 @@ equilayers = {'RegToRegConv': RegToRegConv,
               'ToKmerLayer': ToKmerLayer}
 
 
-def train_model(model, train_generator, val_generator, epochs_to_train_for, seed, save_name=None):
-    np.random.seed(seed)
-    tf.set_random_seed(seed)
-
+def train_model(model, train_generator, val_generator, epochs, save_name=None):
     early_stopping_callback = keras.callbacks.EarlyStopping(
         patience=10, restore_best_weights=True)
     model_history = History()
     model.fit_generator(train_generator,
-                        epochs=epochs_to_train_for,
+                        epochs=epochs,
                         validation_data=val_generator,
-                        callbacks=[early_stopping_callback, model_history],
-
-                        )
+                        callbacks=[early_stopping_callback, model_history])
     model.set_weights(early_stopping_callback.best_weights)
     if save_name is not None:
         model.save(save_name)
@@ -60,24 +55,74 @@ def test_saved_model(model_name, test_generator, dataset, custom_objects=equilay
 
 
 def train_test_model(model, dataset, seed, epochs=80, seq_len=1346, out_pred_len=1000, is_aug=False, model_name=None,
-                     post_hoc=False):
+                     post_hoc=False, one_return=True):
     train_generator, val_generator, test_generator, _ = get_generators(dataset=dataset,
                                                                        seed=seed,
                                                                        seq_len=seq_len,
                                                                        out_pred_len=out_pred_len,
                                                                        is_aug=is_aug)
-    model = train_model(model, train_generator, val_generator, epochs, seed=seed, save_name=model_name)
-    jsd, pears, spear, mse = get_test_values(model, test_generator, dataset=dataset, post_hoc=post_hoc)
-    print(f'{model_name} performance : ', jsd, pears, spear, mse)
-    return jsd, pears, spear, mse
+    if one_return:
+        model = train_model(model, train_generator, val_generator, epochs, save_name=model_name)
+        jsd, pears, spear, mse = get_test_values(model, test_generator, dataset=dataset, post_hoc=post_hoc)
+        print(f'Performance : ', jsd, pears, spear, mse)
+        return jsd, pears, spear, mse
+
+    # step_per_epoch = 50
+    # epochs_to_try = [5, 10, 20, 40, 80, 160]
+    # epochs_results = {}
+    # history = History()
+    # last_epoch = 0
+    # for epoch in epochs_to_try:
+    #
+    #     model.fit_generator(train_generator,
+    #                         epochs=epochs,
+    #                         validation_data=val_generator,
+    #                         callbacks=[early_stopping_callback, history],
+    #                         )
+    #
+    #     input()
+    #     print(model.history)
+    #     len(model.history['loss'])
+    #     input()
+    #     self.best_weights = self.model.get_weights()
+    #
+    #
+    #     epochs_to_train_for = epoch - last_epoch
+    #     last_epoch = epoch
+    #     model.fit_generator(standard_train_batch_generator,
+    #                         validation_data=(valid_data.X, valid_data.Y),
+    #                         epochs=epochs_to_train_for,
+    #                         steps_per_epoch=step_per_epoch,
+    #                         callbacks=[auroc_callback, history],
+    #                         workers=os.cpu_count(),
+    #                         use_multiprocessing=True
+    #                         )
+    #     model.set_weights(auroc_callback.best_weights)
+    #     if post_hoc:
+    #         inference_model = post_hoc_from_model(model)
+    #         a = roc_auc_score(y_true=valid_data.Y, y_score=inference_model.predict(valid_data.X))
+    #         b = roc_auc_score(y_true=test_data.Y, y_score=inference_model.predict(test_data.X))
+    #     else:
+    #         a = roc_auc_score(y_true=valid_data.Y, y_score=model.predict(valid_data.X))
+    #         b = roc_auc_score(y_true=test_data.Y, y_score=model.predict(test_data.X))
+    #     model.set_weights(auroc_callback.last_weights)
+    #     epochs_results[epoch] = (a, b)
+    #
+    # model.set_weights(early_stopping_callback.best_weights)
+    # if model_name is not None:
+    #     model.save(model_name)
+    # return model
+    # return epochs_results
 
 
-def test_BPN_model(model, logname, aggregatedname, dataset, model_name=None, seed_max=3, is_aug=False, post_hoc=False):
+def test_BPN_model(model, logname, aggregatedname, dataset, model_name=None, epochs=80, seed_max=3, is_aug=False,
+                   post_hoc=False):
     aggregated = list()
     for seed in range(seed_max):
         jsd, pears, spear, mse = train_test_model(model=model,
                                                   model_name=model_name,
                                                   dataset=dataset,
+                                                  epochs=epochs,
                                                   seed=seed,
                                                   is_aug=is_aug,
                                                   post_hoc=post_hoc)
@@ -89,12 +134,12 @@ def test_BPN_model(model, logname, aggregatedname, dataset, model_name=None, see
 
     # Now value is a list of tuples of results, one for each seed.
     # Let us aggregate it into a mean and std for each
-    with open(aggregatedname, 'a') as f:
-        f.write(f'{model_name}\n')
-        aggregated = np.array(aggregated)
-        jsd, pears, spear, mse = np.mean(aggregated, axis=0)
-        f.write(f'{jsd} {pears} {spear} {mse}\n')
-        f.write(f'\n')
+    # with open(aggregatedname, 'a') as f:
+    #     f.write(f'{model_name}\n')
+    #     aggregated = np.array(aggregated)
+    #     jsd, pears, spear, mse = np.mean(aggregated, axis=0)
+    #     f.write(f'{jsd} {pears} {spear} {mse}\n')
+    #     f.write(f'\n')
 
 
 if __name__ == '__main__':
