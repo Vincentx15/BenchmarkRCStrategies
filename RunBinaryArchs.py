@@ -1,72 +1,21 @@
-from sklearn.metrics import roc_auc_score
-from sklearn.metrics import average_precision_score
-
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-from keras.utils import CustomObjectScope
-from keras.models import load_model
-from scipy.special import softmax
-
-from keras_genomics.layers.convolutional import RevCompConv1D
-import tensorflow as tf
-
-import statistics
-from keras.utils import CustomObjectScope
-from keras.models import load_model
-from keras.callbacks import History
-
-from scipy.stats import spearmanr
-from vizsequence import viz_sequence
-from matplotlib.ticker import FormatStrFormatter
-from tensorflow.python.keras.utils.data_utils import Sequence
-
-# from binary_model_archs import get_rc_model
-# from binary_model_archs import get_reg_model
-# from binary_model_archs import get_siamese_model
-
-from seqdataloader.batchproducers.coordbased import coordbatchproducers
-from sklearn.metrics import roc_auc_score
-from sklearn.metrics import average_precision_score
-
-from collections import namedtuple
-import keras
 import gzip
-
-from seqdataloader.batchproducers.coordbased.coordbatchtransformers import get_revcomp
-from seqdataloader.batchproducers.coordbased import coordbatchproducers
-from seqdataloader.batchproducers.coordbased.coordbatchproducers import DownsampleNegativesCoordsBatchProducer
-from seqdataloader.batchproducers.coordbased.coordbatchproducers import SimpleCoordsBatchProducer
-from seqdataloader.batchproducers.coordbased import coordstovals
-from seqdataloader.batchproducers import coordbased
-from seqdataloader.batchproducers.coordbased import coordbatchproducers
-from seqdataloader.batchproducers.coordbased import coordbatchtransformers
-from seqdataloader.batchproducers.coordbased.coordstovals.bigwig import AbstractCountAndProfileTransformer
-from seqdataloader.batchproducers.coordbased.coordstovals.bigwig import LogCountsPlusOne
-from seqdataloader.batchproducers.coordbased.coordstovals.bigwig import SmoothProfiles
-from seqdataloader.batchproducers.coordbased.coordstovals.bigwig import BigWigReader
-from seqdataloader.batchproducers.coordbased.coordstovals.bigwig import smooth_profiles
-from seqdataloader.batchproducers.coordbased.coordstovals.bigwig import rolling_window
-from seqdataloader.batchproducers.coordbased.core import Coordinates, KerasBatchGenerator, apply_mask
-from seqdataloader.batchproducers.coordbased.coordbatchtransformers import AbstractCoordBatchTransformer
-from seqdataloader.batchproducers.coordbased.coordbatchtransformers import get_revcomp
 import numpy as np
+from sklearn.metrics import roc_auc_score
 
-import os
+import keras
 
-Coordinates = namedtuple("Coordinates",
-                         ["chrom", "start", "end", "isplusstrand"])
-Coordinates.__new__.__defaults__ = (True,)
+from seqdataloader.batchproducers.coordbased.coordbatchproducers import DownsampleNegativesCoordsBatchProducer
+from seqdataloader.batchproducers.coordbased.core import Coordinates
+from seqdataloader.batchproducers.coordbased.coordbatchtransformers import get_revcomp
 
 
 def apply_mask(tomask, mask):
     if isinstance(tomask, dict):
         return dict([(key, val[mask]) for key, val in tomask.items()])
     elif isinstance(tomask, list):
-        return [x[mask] for x in mask]
+        return [x[mask] for x in tomask]
     else:
-        return x[mask]
+        return tomask[mask]
 
 
 class KerasBatchGenerator(keras.utils.Sequence):
@@ -237,7 +186,7 @@ class AbstractSingleNdarrayCoordsToVals(CoordsToVals):
         """
         Args:
             coors (:obj:`list` of :obj:`Coordinates):
-            
+
         Returns:
             numpy ndarray
         """
@@ -307,54 +256,40 @@ class RevcompTackedOnSimpleCoordsBatchProducer(DownsampleNegativesCoordsBatchPro
         return [x for x in curr_coords] + [get_revcomp(x) for x in curr_coords]
 
 
-def get_aug_alt_generator(dataset, seq_len, curr_seed, curr_batch_size):
-    inputs_coordstovals = coordbased.coordstovals.fasta.PyfaidxCoordsToVals(
-        genome_fasta_path="hg19.genome.fa",
-        center_size_to_use=seq_len)
+class AuRocNoCallback():
+    def __init__(self, model, valid_X, valid_Y):
+        self.model = model
+        self.valid_X = valid_X
+        self.valid_Y = valid_Y
+        self.best_auroc_sofar = 0.0
+        self.best_weights = None
+        self.best_epoch_number = 0
 
-    targets_coordstovals = SimpleLookup(
-        lookup_file="%s/%s_lookup.bed.gz" % (dataset, dataset),
-        transformation=None, default_returnval=0.0)
-
-    target_proportion_positives = 1 / 5
-
-    aug_tacked_on_keras_train_batch_generator = KerasBatchGenerator(
-        coordsbatch_producer=RevcompTackedOnSimpleCoordsBatchProducer(
-            pos_bed_file="%s/%s_foreground_train.bed.gz" % (dataset, dataset),
-            neg_bed_file="%s/%s_background_train.bed.gz" % (dataset, dataset),
-            target_proportion_positives=target_proportion_positives,
-            batch_size=curr_batch_size,
-            shuffle_before_epoch=True,
-            seed=curr_seed),
-        inputs_coordstovals=inputs_coordstovals,
-        targets_coordstovals=targets_coordstovals)
-
-    return aug_tacked_on_keras_train_batch_generator
+    def on_epoch_end(self, epoch):
+        preds = self.model.predict(self.valid_X)
+        auroc = roc_auc_score(y_true=self.valid_Y, y_score=preds)
+        if auroc > self.best_auroc_sofar:
+            self.best_weights = self.model.get_weights()
+            self.best_epoch_number = epoch
+            self.best_auroc_sofar = auroc
+        return auroc
 
 
-def get_generators(dataset, seq_len, is_aug, curr_seed):
-    inputs_coordstovals = coordbased.coordstovals.fasta.PyfaidxCoordsToVals(
-        genome_fasta_path="hg19.genome.fa",
-        center_size_to_use=seq_len)
-    targets_coordstovals = SimpleLookup(
-        lookup_file="%s/%s_lookup.bed.gz" % (dataset, dataset),
-        transformation=None, default_returnval=0.0)
+class AuRocCallback(keras.callbacks.Callback):
+    def __init__(self, model, valid_X, valid_Y):
+        self.model = model
+        self.valid_X = valid_X
+        self.valid_Y = valid_Y
+        self.best_auroc_sofar = 0.0
+        self.best_weights = None
+        self.last_weights = None
+        self.best_epoch_number = 0
 
-    target_proportion_positives = 1 / 5
-
-    standard_train_batch_generator = KerasBatchGenerator(
-        coordsbatch_producer=coordbatchproducers.DownsampleNegativesCoordsBatchProducer(
-            pos_bed_file="%s/%s_foreground_train.bed.gz" % (dataset, dataset),
-            neg_bed_file="%s/%s_background_train.bed.gz" % (dataset, dataset),
-            target_proportion_positives=target_proportion_positives,
-            batch_size=100,
-            shuffle_before_epoch=True,
-            seed=curr_seed),
-        inputs_coordstovals=inputs_coordstovals,
-        targets_coordstovals=targets_coordstovals)
-
-    if not is_aug:
-        return standard_train_batch_generator
-    else:
-        standard_train_batch_generator.coordsbatch_transformer = coordbatchtransformers.ReverseComplementAugmenter()
-        return standard_train_batch_generator
+    def on_epoch_end(self, epoch, logs):
+        preds = self.model.predict(self.valid_X)
+        auroc = roc_auc_score(y_true=self.valid_Y, y_score=preds)
+        self.last_weights = self.model.get_weights()
+        if (auroc > self.best_auroc_sofar):
+            self.best_weights = self.model.get_weights()
+            self.best_epoch_number = epoch
+            self.best_auroc_sofar = auroc
