@@ -371,12 +371,28 @@ def profile_jsd(true_prof_probs, pred_prof_probs, jsd_smooth_kernel_sigma):
     return np.mean(jsd, axis=-1)  # Average over strands
 
 
-def post_hoc_from_model_BPN(model):
+def post_hoc_from_model_BPN(model, dataset):
     # Let's create the model
     # Define the inputs
-    fwd_sequence_input = keras.models.Input(shape=(1346, 4))
-    fwd_patchcap_logcount = keras.models.Input(shape=(2,))
-    fwd_patchcap_profile = keras.models.Input(shape=(1000, 2))
+    # fwd_sequence_input = keras.models.Input(shape=(1346, 4))
+    # fwd_patchcap_logcount = keras.models.Input(shape=(2,))
+    # fwd_patchcap_profile = keras.models.Input(shape=(1000, 2))
+
+    def get_inputs(dataset, out_pred_len=1000, input_seq_len=1346):
+
+        inp = keras.layers.Input(shape=(input_seq_len, 4), name='sequence')
+        if dataset == "SPI1":
+            bias_counts_input = keras.layers.Input(shape=(1,), name="control_logcount")
+            bias_profile_input = keras.layers.Input(shape=(out_pred_len, 2),
+                                                    name="control_profile")
+        else:
+            bias_counts_input = keras.layers.Input(shape=(2,), name="patchcap.logcount")
+            # if working with raw counts, go from logcount->count
+            bias_profile_input = keras.layers.Input(shape=(out_pred_len, 2),
+                                                    name="patchcap.profile")
+        return inp, bias_counts_input, bias_profile_input
+
+    fwd_sequence_input, fwd_patchcap_logcount, fwd_patchcap_profile = get_inputs(dataset=dataset)
 
     # RevComp input
     rev_sequence_input = keras.layers.Lambda(lambda x: x[:, ::-1, ::-1])(fwd_sequence_input)
@@ -413,7 +429,7 @@ def get_test_values(model, test_generator, dataset, post_hoc=False):
     preds_profile = []
     labels_profile = []
 
-    trained_model = post_hoc_from_model_BPN(model) if post_hoc else model
+    trained_model = post_hoc_from_model_BPN(model, dataset) if post_hoc else model
 
     for batch_idx in range(len(test_generator)):
         batch_inputs, batch_labels = test_generator[batch_idx]

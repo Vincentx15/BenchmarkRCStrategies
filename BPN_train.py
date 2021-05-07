@@ -115,7 +115,7 @@ def train_test_model(model, dataset, seed, epochs=80, seq_len=1346, out_pred_len
     # return epochs_results
 
 
-def test_BPN_model(model, logname, aggregatedname, dataset, model_name=None, epochs=80, seed_max=3, is_aug=False,
+def test_BPN_model(model, logname, dataset, model_name=None, epochs=80, seed_max=6, is_aug=False,
                    post_hoc=False):
     aggregated = list()
     for seed in range(seed_max):
@@ -153,22 +153,23 @@ if __name__ == '__main__':
     with open(logname, 'w') as f:
         f.write('Log of the experiments on BPN :\n')
 
-    aggname = 'outfile_bpn.txt'
-    with open(aggname, 'w') as f:
-        f.write('Experiments results for BPN :\n')
-
     for dataset in ['KLF4', 'NANOG', 'SOX2', 'OCT4']:
-        model_name = f'non equivariant with dataset={dataset}'
-        standard_model = StandardBPNetArch(dataset=dataset).get_keras_model()
-        test_BPN_model(model=standard_model, model_name=model_name, dataset=dataset,
-                       logname=logname, aggregatedname=aggname)
+        # model_name = f'non equivariant with dataset={dataset}'
+        # standard_model = StandardBPNetArch(dataset=dataset).get_keras_model()
+        # test_BPN_model(model=standard_model, model_name=model_name, dataset=dataset,
+        #                logname=logname)
+        #
+        # model_name = f'RCPS with dataset={dataset}'
+        # equinet_model = RcBPNetArch(dataset=dataset).get_keras_model()
+        # test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
+        #                logname=logname)
 
-        model_name = f'RCPS with dataset={dataset}'
-        equinet_model = RcBPNetArch(dataset=dataset).get_keras_model()
-        test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
-                       logname=logname, aggregatedname=aggname)
+        # model_name = f'best_equi_aug with dataset={dataset}'
+        # equi_model = EquiNetBP(dataset=dataset, kmers=2, filters=((96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
+        # test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
+        #                logname=logname, is_aug=True)
 
         model_name = f'rc_post_hoc with dataset={dataset}'
         rc_model = StandardBPNetArch(dataset=dataset).get_keras_model()
         test_BPN_model(model=rc_model, model_name=model_name, dataset=dataset,
-                       logname=logname, aggregatedname=aggname)
+                       logname=logname, is_aug=True, post_hoc=True)
