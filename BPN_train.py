@@ -6,7 +6,7 @@ from keras.callbacks import History
 
 from keras_genomics.layers.convolutional import RevCompConv1D
 
-from BPNetArchs import RcBPNetArch, EquiNetBP, StandardBPNetArch, MultichannelMultinomialNLL
+from BPNetArchs import RcBPNetArch, EquiNetBP, StandardBPNetArch, MultichannelMultinomialNLL, RegularBPN
 from RunBPNetArchs import get_generators, get_test_values
 
 from equinet import *
@@ -154,6 +154,7 @@ if __name__ == '__main__':
         f.write('Log of the experiments on BPN :\n')
 
     for dataset in ['KLF4', 'NANOG', 'SOX2', 'OCT4']:
+        pass
         # model_name = f'non equivariant with dataset={dataset}'
         # standard_model = StandardBPNetArch(dataset=dataset).get_keras_model()
         # test_BPN_model(model=standard_model, model_name=model_name, dataset=dataset,
@@ -163,13 +164,28 @@ if __name__ == '__main__':
         # equinet_model = RcBPNetArch(dataset=dataset).get_keras_model()
         # test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
         #                logname=logname)
+        
+        model_name = f'custom_RCPS with dataset={dataset}'
+        equinet_model = RegularBPN(dataset=dataset).get_keras_model()
+        test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
+                       logname=logname)
+
+        # model_name = f'equi_75_k1 with dataset={dataset}'
+        # equi_model = EquiNetBP(dataset=dataset, kmers=1, filters=((96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
+        # test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
+        #                logname=logname, is_aug=True)
+
+        # model_name = f'best_equi with dataset={dataset}'
+        # equi_model = EquiNetBP(dataset=dataset, kmers=2, filters=((96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
+        # test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
+        #                logname=logname)
 
         # model_name = f'best_equi_aug with dataset={dataset}'
         # equi_model = EquiNetBP(dataset=dataset, kmers=2, filters=((96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
         # test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
         #                logname=logname, is_aug=True)
 
-        model_name = f'rc_post_hoc with dataset={dataset}'
-        rc_model = StandardBPNetArch(dataset=dataset).get_keras_model()
-        test_BPN_model(model=rc_model, model_name=model_name, dataset=dataset,
-                       logname=logname, is_aug=True, post_hoc=True)
+        # model_name = f'rc_post_hoc with dataset={dataset}'
+        # rc_model = StandardBPNetArch(dataset=dataset).get_keras_model()
+        # test_BPN_model(model=rc_model, model_name=model_name, dataset=dataset,
+        #                logname=logname, is_aug=True, post_hoc=True)

@@ -633,6 +633,235 @@ class EquiNetBP(kl.Layer):
         return count_out, profile_out
 
 
+class RegularBPN(kl.Layer):
+    def __init__(self,
+                 dataset,
+                 input_seq_len=1346,
+                 c_task_weight=0,
+                 p_task_weight=1,
+                 filters=(64, 64, 64, 64, 64, 64, 64),
+                 kernel_sizes=(21, 3, 3, 3, 3, 3, 3, 75),
+                 outconv_kernel_size=75,
+                 weight_decay=0.01,
+                 optimizer='Adam',
+                 lr=0.001,
+                 kernel_initializer="glorot_uniform",
+                 seed=42,
+                 is_add=True,
+                 kmers=1,
+                 **kwargs):
+        super(RegularBPN, self).__init__(**kwargs)
+
+        self.dataset = dataset
+        self.input_seq_len = input_seq_len
+        self.c_task_weight = c_task_weight
+        self.p_task_weight = p_task_weight
+        self.filters = filters
+        self.kernel_sizes = kernel_sizes
+        self.outconv_kernel_size = outconv_kernel_size
+        self.optimizer = optimizer
+        self.weight_decay = weight_decay
+        self.lr = lr
+        self.learning_rate = lr
+        self.kernel_initializer = kernel_initializer
+        self.seed = seed
+        self.is_add = is_add
+        self.n_dil_layers = len(filters) - 1
+
+        # Add k-mers, if k=1, it's just a placeholder
+        self.kmers = int(kmers)
+        self.to_kmer = ToKmerLayer(k=self.kmers)
+        self.conv1_kernel_size = kernel_sizes[0] - self.kmers + 1
+        reg_in = self.to_kmer.features // 2
+        first_reg = filters[0]
+        self.first_conv = RegToRegConv(reg_in=reg_in,
+                                       reg_out=first_reg,
+                                       kernel_size=self.conv1_kernel_size,
+                                       kernel_initializer=self.kernel_initializer,
+                                       padding='valid')
+        self.first_act = kl.core.Activation("relu")
+
+        # Now add the intermediate layer : sequence of conv, activation
+        self.reg_layers = []
+        self.activation_layers = []
+        self.croppings = []
+        for i in range(1, len(filters)):
+            prev_reg = filters[i - 1]
+            next_reg = filters[i]
+            dilation_rate = 2 ** i
+            self.reg_layers.append(RegToRegConv(
+                reg_in=prev_reg,
+                reg_out=next_reg,
+                kernel_size=kernel_sizes[i],
+                dilatation=dilation_rate
+            ))
+            self.croppings.append((kernel_sizes[i] - 1) * dilation_rate)
+            # self.bn_layers.append(IrrepBatchNorm(a=next_a, b=next_b, placeholder=placeholder_bn))
+            self.activation_layers.append(kl.core.Activation("relu"))
+
+        self.last_reg = filters[-1]
+        self.prebias = RegToRegConv(reg_in=self.last_reg,
+                                    reg_out=1,
+                                    kernel_size=self.outconv_kernel_size,
+                                    kernel_initializer=self.kernel_initializer,
+                                    padding='valid')
+        self.last = RegToRegConv(reg_in=3,
+                                 reg_out=1,
+                                 kernel_size=1,
+                                 kernel_initializer=self.kernel_initializer,
+                                 padding='valid')
+
+    def get_output_profile_len(self):
+        embedding_len = self.input_seq_len
+        embedding_len -= (self.conv1_kernel_size - 1)
+        for cropping in self.croppings:
+            embedding_len -= cropping
+        out_profile_len = embedding_len - (self.outconv_kernel_size - 1)
+        return out_profile_len
+
+    def trim_flanks_of_inputs(self, inputs, output_len, width_to_trim, filters):
+        layer = keras.layers.Lambda(
+            function=lambda x: x[:, int(0.5 * (width_to_trim)):-(width_to_trim - int(0.5 * (width_to_trim)))],
+            output_shape=(output_len, filters))(inputs)
+        return layer
+
+    def get_inputs(self):
+        out_pred_len = self.get_output_profile_len()
+
+        inp = kl.Input(shape=(self.input_seq_len, 4), name='sequence')
+        if self.dataset == "SPI1":
+            bias_counts_input = kl.Input(shape=(1,), name="control_logcount")
+            bias_profile_input = kl.Input(shape=(out_pred_len, 2),
+                                          name="control_profile")
+        else:
+            bias_counts_input = kl.Input(shape=(2,), name="patchcap.logcount")
+            # if working with raw counts, go from logcount->count
+            bias_profile_input = kl.Input(shape=(1000, 2),
+                                          name="patchcap.profile")
+        return inp, bias_counts_input, bias_profile_input
+
+    def get_names(self):
+        if self.dataset == "SPI1":
+            countouttaskname = "task0_logcount"
+            profileouttaskname = "task0_profile"
+        elif self.dataset == 'NANOG':
+            countouttaskname = "CHIPNexus.NANOG.logcount"
+            profileouttaskname = "CHIPNexus.NANOG.profile"
+        elif self.dataset == "OCT4":
+            countouttaskname = "CHIPNexus.OCT4.logcount"
+            profileouttaskname = "CHIPNexus.OCT4.profile"
+        elif self.dataset == "KLF4":
+            countouttaskname = "CHIPNexus.KLF4.logcount"
+            profileouttaskname = "CHIPNexus.KLF4.profile"
+        elif self.dataset == "SOX2":
+            countouttaskname = "CHIPNexus.SOX2.logcount"
+            profileouttaskname = "CHIPNexus.SOX2.profile"
+        else:
+            raise ValueError("The dataset asked does not exist")
+        return countouttaskname, profileouttaskname
+
+    def get_keras_model(self):
+        """
+        Make a first convolution, then use skip connections with dilatations (that shrink the input)
+        to get 'combined_conv'
+
+        Then create two heads :
+         - one is used to predict counts (and has a weight of zero in the loss)
+         - one is used to predict the profile
+        """
+        sequence_input, bias_counts_input, bias_profile_input = self.get_inputs()
+
+        kmer_inputs = self.to_kmer(sequence_input)
+        curr_layer_size = self.input_seq_len - (self.conv1_kernel_size - 1) - (self.kmers - 1)
+        prev_layers = self.first_conv(kmer_inputs)
+
+        for i, (conv_layer, activation_layer, cropping) in enumerate(zip(self.reg_layers,
+                                                                         self.activation_layers,
+                                                                         self.croppings)):
+
+            conv_output = conv_layer(prev_layers)
+            conv_output = activation_layer(conv_output)
+            curr_layer_size = curr_layer_size - cropping
+
+            trimmed_prev_layers = self.trim_flanks_of_inputs(inputs=prev_layers,
+                                                             output_len=curr_layer_size,
+                                                             width_to_trim=cropping,
+                                                             filters=self.filters[i]*2)
+            if self.is_add:
+                prev_layers = kl.add([trimmed_prev_layers, conv_output])
+            else:
+                prev_layers = kl.average([trimmed_prev_layers, conv_output])
+
+        combined_conv = prev_layers
+
+        countouttaskname, profileouttaskname = self.get_names()
+
+        # ============== Placeholder for counts =================
+        count_out = kl.Lambda(lambda x: x, name=countouttaskname)(bias_counts_input)
+
+        # ============== Profile prediction ======================
+        profile_out_prebias = self.prebias(combined_conv)
+
+        # # concatenation of the bias layer both before and after is needed for rc symmetry
+        concatenated = kl.concatenate([kl.Lambda(lambda x: x[:, :, ::-1])(bias_profile_input),
+                                       profile_out_prebias,
+                                       bias_profile_input], axis=-1)
+        profile_out = self.last(concatenated)
+        profile_out = kl.Lambda(lambda x: x, name=profileouttaskname)(profile_out)
+
+        model = keras.models.Model(
+            inputs=[sequence_input, bias_counts_input, bias_profile_input],
+            outputs=[count_out, profile_out])
+        model.compile(keras.optimizers.Adam(lr=self.lr),
+                      loss=['mse', MultichannelMultinomialNLL(2)],
+                      loss_weights=[self.c_task_weight, self.p_task_weight])
+        # print(model.summary())
+        return model
+
+    def eager_call(self, sequence_input, bias_counts_input, bias_profile_input):
+        """
+        Testing only
+        """
+        kmer_inputs = self.to_kmer(sequence_input)
+        curr_layer_size = self.input_seq_len - (self.conv1_kernel_size - 1) - (self.kmers - 1)
+        prev_layers = self.first_conv(kmer_inputs)
+
+        for i, (conv_layer, activation_layer, cropping) in enumerate(zip(self.reg_layers,
+                                                                         self.activation_layers,
+                                                                         self.croppings)):
+
+            conv_output = conv_layer(prev_layers)
+            conv_output = activation_layer(conv_output)
+            curr_layer_size = curr_layer_size - cropping
+
+            trimmed_prev_layers = self.trim_flanks_of_inputs(inputs=prev_layers,
+                                                             output_len=curr_layer_size,
+                                                             width_to_trim=cropping,
+                                                             filters=self.filters[i][0] + self.filters[i][1])
+            if self.is_add:
+                prev_layers = kl.add([trimmed_prev_layers, conv_output])
+            else:
+                prev_layers = kl.average([trimmed_prev_layers, conv_output])
+
+        combined_conv = prev_layers
+
+        # Placeholder for counts
+        count_out = bias_counts_input
+
+        # Profile prediction
+        profile_out_prebias = self.prebias(combined_conv)
+
+        # concatenation of the bias layer both before and after is needed for rc symmetry
+        rc_profile_input = bias_profile_input[:, :, ::-1]
+        concatenated = K.concatenate([rc_profile_input,
+                                      profile_out_prebias,
+                                      bias_profile_input], axis=-1)
+
+        profile_out = self.last(concatenated)
+
+        return count_out, profile_out
+
+
 if __name__ == '__main__':
 
     import tensorflow as tf
