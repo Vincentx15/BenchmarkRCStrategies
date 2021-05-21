@@ -1,5 +1,6 @@
 import os
-
+import gzip
+import random
 import numpy as np
 import scipy
 from scipy.special import softmax
@@ -55,9 +56,26 @@ def get_inputs_and_targets_coordstoval(dataset, seq_len, out_pred_len):
     return inputs_coordstovals, targets_coordstovals
 
 
-def get_train_generator(dataset, inputs_coordstovals, targets_coordstovals, seed, is_aug=False):
-    train_file = os.path.join('data', dataset, f"bpnet_{dataset}_train_1k_around_summits.bed.gz")
+def get_reduced_bed(infile, outfile, size=1000):
+    with gzip.open(infile) as f:
+        lines = f.readlines()
+    selected_indices = sorted(random.sample(list(range(len(lines))), size))
+    selected_lines = [lines[selected] for selected in selected_indices]
+
+    with gzip.open(outfile, 'wb') as f:
+        for line in selected_lines:
+            f.write(line)
+
+
+def get_train_generator(dataset, inputs_coordstovals, targets_coordstovals, seed, is_aug=False, reduced=False):
     chromsizes_file = os.path.join('data', "mm10.chrom.sizes")
+
+    pos_bed = os.path.join('data', dataset, f"bpnet_{dataset}_train_1k_around_summits.bed.gz")
+    if reduced:
+        pos_bed_reduced = os.path.join('data', dataset, f"bpnet_{dataset}_reduced_train_1k_around_summits.bed.gz")
+        if not os.path.exists(pos_bed_reduced) or True:
+            get_reduced_bed(infile=pos_bed, outfile=pos_bed_reduced)
+        pos_bed = pos_bed_reduced
 
     if is_aug:
         coords_transformer = coordbatchtransformers.ReverseComplementAugmenter().chain(
@@ -66,7 +84,7 @@ def get_train_generator(dataset, inputs_coordstovals, targets_coordstovals, seed
         coords_transformer = coordbatchtransformers.UniformJitter(maxshift=200, chromsizes_file=chromsizes_file)
     train_batch_generator = KerasBatchGenerator(
         coordsbatch_producer=coordbatchproducers.SimpleCoordsBatchProducer(
-            bed_file=train_file,
+            bed_file=pos_bed,
             batch_size=64,
             shuffle_before_epoch=True,
             seed=seed),
@@ -117,7 +135,7 @@ def get_test_generator(dataset, inputs_coordstovals, targets_coordstovals, seed)
     return keras_test_batch_generator, keras_rc_test_batch_generator
 
 
-def get_generators(dataset, seed, seq_len=1346, out_pred_len=1000, is_aug=False):
+def get_generators(dataset, seed, seq_len=1346, out_pred_len=1000, is_aug=False, reduced=False):
     inputs_coordstovals, targets_coordstovals = get_inputs_and_targets_coordstoval(dataset=dataset,
                                                                                    seq_len=seq_len,
                                                                                    out_pred_len=out_pred_len)
@@ -125,7 +143,8 @@ def get_generators(dataset, seed, seq_len=1346, out_pred_len=1000, is_aug=False)
                                           seed=seed,
                                           inputs_coordstovals=inputs_coordstovals,
                                           targets_coordstovals=targets_coordstovals,
-                                          is_aug=is_aug)
+                                          is_aug=is_aug,
+                                          reduced=reduced)
     val_generator = get_val_generator(dataset=dataset,
                                       seed=seed,
                                       inputs_coordstovals=inputs_coordstovals,

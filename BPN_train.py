@@ -14,6 +14,9 @@ import collections
 
 from keras.models import load_model
 import keras.losses
+import gzip
+import random
+
 
 # Global variables
 keras.losses.MultichannelMultinomialNLL = MultichannelMultinomialNLL
@@ -55,12 +58,13 @@ def test_saved_model(model_name, test_generator, dataset, custom_objects=equilay
 
 
 def train_test_model(model, dataset, seed, epochs=80, seq_len=1346, out_pred_len=1000, is_aug=False, model_name=None,
-                     post_hoc=False, one_return=True):
+                     post_hoc=False, one_return=True, reduced=False):
     train_generator, val_generator, test_generator, _ = get_generators(dataset=dataset,
                                                                        seed=seed,
                                                                        seq_len=seq_len,
                                                                        out_pred_len=out_pred_len,
-                                                                       is_aug=is_aug)
+                                                                       is_aug=is_aug,
+                                                                       reduced=reduced)
     if one_return:
         model = train_model(model, train_generator, val_generator, epochs, save_name=model_name)
         jsd, pears, spear, mse = get_test_values(model, test_generator, dataset=dataset, post_hoc=post_hoc)
@@ -116,7 +120,7 @@ def train_test_model(model, dataset, seed, epochs=80, seq_len=1346, out_pred_len
 
 
 def test_BPN_model(model, logname, dataset, model_name=None, epochs=80, seed_max=6, is_aug=False,
-                   post_hoc=False):
+                   post_hoc=False, reduced=False):
     aggregated = list()
     for seed in range(seed_max):
         jsd, pears, spear, mse = train_test_model(model=model,
@@ -125,21 +129,103 @@ def test_BPN_model(model, logname, dataset, model_name=None, epochs=80, seed_max
                                                   epochs=epochs,
                                                   seed=seed,
                                                   is_aug=is_aug,
-                                                  post_hoc=post_hoc)
+                                                  post_hoc=post_hoc,
+                                                  reduced=reduced)
         aggregated.append((jsd, pears, spear, mse))
         with open(logname, 'a') as f:
             f.write(f'{model_name} with seed={seed}\n')
             f.write(f'{jsd} {pears} {spear} {mse}\n')
             f.write(f'\n')
 
-    # Now value is a list of tuples of results, one for each seed.
-    # Let us aggregate it into a mean and std for each
-    # with open(aggregatedname, 'a') as f:
-    #     f.write(f'{model_name}\n')
-    #     aggregated = np.array(aggregated)
-    #     jsd, pears, spear, mse = np.mean(aggregated, axis=0)
-    #     f.write(f'{jsd} {pears} {spear} {mse}\n')
-    #     f.write(f'\n')
+
+def test_all_models(logname):
+    with open(logname, 'w') as f:
+        f.write('Log of the experiments on BPN :\n')
+
+    for dataset in ['KLF4', 'NANOG', 'SOX2', 'OCT4']:
+        pass
+        # Get the non equivariant model
+        model_name = f'non equivariant with dataset={dataset}'
+        standard_model = StandardBPNetArch(dataset=dataset).get_keras_model()
+        test_BPN_model(model=standard_model, model_name=model_name, dataset=dataset,
+                       logname=logname)
+
+        # Compare to the RCPS, original and custom
+        model_name = f'RCPS with dataset={dataset}'
+        equinet_model = RcBPNetArch(dataset=dataset).get_keras_model()
+        test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
+                       logname=logname)
+
+        model_name = f'custom_RCPS with dataset={dataset}'
+        equinet_model = RegularBPN(dataset=dataset).get_keras_model()
+        test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
+                       logname=logname)
+
+        # Compare to equinets 75 with k=1 and k=2
+        model_name = f'equi_75_k1 with dataset={dataset}'
+        equi_model = EquiNetBP(dataset=dataset, kmers=1, filters=(
+        (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
+        test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
+                       logname=logname)
+
+        model_name = f'best_equi with dataset={dataset}'
+        equi_model = EquiNetBP(dataset=dataset, kmers=2, filters=(
+        (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
+        test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
+                       logname=logname)
+
+        # Compare to regular 2
+        model_name = f'RCPS_2 with dataset={dataset}'
+        rcps2_model = RcBPNetArch(dataset=dataset, kmers=2).get_keras_model()
+        test_BPN_model(model=rcps2_model, model_name=model_name, dataset=dataset,
+                       logname=logname)
+
+        # Try assessing the impact of data augmentation on equivariant models
+        model_name = f'best_equi_aug with dataset={dataset}'
+        equi_model = EquiNetBP(dataset=dataset, kmers=2, filters=(
+        (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
+        test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
+                       logname=logname, is_aug=True)
+
+        # Look at the post-hoc performance
+        model_name = f'rc_post_hoc with dataset={dataset}'
+        rc_model = StandardBPNetArch(dataset=dataset).get_keras_model()
+        test_BPN_model(model=rc_model, model_name=model_name, dataset=dataset,
+                       logname=logname, is_aug=True, post_hoc=True)
+
+
+def test_all_models_reduced(logname):
+    with open(logname, 'w') as f:
+        f.write('Log of the experiments on BPN :\n')
+
+    for dataset in ['KLF4', 'NANOG', 'SOX2', 'OCT4']:
+        pass
+        # Get the non equivariant model
+        model_name = f'reduced_non_equivariant with dataset={dataset}'
+        standard_model = StandardBPNetArch(dataset=dataset).get_keras_model()
+        test_BPN_model(model=standard_model, model_name=model_name, dataset=dataset,
+                       logname=logname, reduced=True)
+
+        # Compare to the custom RCPS
+        model_name = f'reduced_custom_RCPS with dataset={dataset}'
+        equinet_model = RegularBPN(dataset=dataset).get_keras_model()
+        test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
+                       logname=logname, reduced=True)
+
+        # Compare to equinets 75 with k=2
+        model_name = f'reduced_best_equi with dataset={dataset}'
+        equi_model = EquiNetBP(dataset=dataset, kmers=2, filters=(
+            (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
+        test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
+                       logname=logname, reduced=True)
+
+        # Compare to regular 2
+        model_name = f'reduced_RCPS_2 with dataset={dataset}'
+        rcps2_model = RcBPNetArch(dataset=dataset, kmers=2).get_keras_model()
+        test_BPN_model(model=rcps2_model, model_name=model_name, dataset=dataset,
+                       logname=logname, reduced=True)
+
+
 
 
 if __name__ == '__main__':
@@ -149,43 +235,5 @@ if __name__ == '__main__':
     np.random.seed(first_seed)
     tf.set_random_seed(first_seed)
 
-    logname = 'logfile_bpn.txt'
-    with open(logname, 'w') as f:
-        f.write('Log of the experiments on BPN :\n')
-
-    for dataset in ['KLF4', 'NANOG', 'SOX2', 'OCT4']:
-        pass
-        # model_name = f'non equivariant with dataset={dataset}'
-        # standard_model = StandardBPNetArch(dataset=dataset).get_keras_model()
-        # test_BPN_model(model=standard_model, model_name=model_name, dataset=dataset,
-        #                logname=logname)
-        #
-        # model_name = f'RCPS with dataset={dataset}'
-        # equinet_model = RcBPNetArch(dataset=dataset).get_keras_model()
-        # test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
-        #                logname=logname)
-        
-        model_name = f'custom_RCPS with dataset={dataset}'
-        equinet_model = RegularBPN(dataset=dataset).get_keras_model()
-        test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
-                       logname=logname)
-
-        # model_name = f'equi_75_k1 with dataset={dataset}'
-        # equi_model = EquiNetBP(dataset=dataset, kmers=1, filters=((96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
-        # test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
-        #                logname=logname, is_aug=True)
-
-        # model_name = f'best_equi with dataset={dataset}'
-        # equi_model = EquiNetBP(dataset=dataset, kmers=2, filters=((96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
-        # test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
-        #                logname=logname)
-
-        # model_name = f'best_equi_aug with dataset={dataset}'
-        # equi_model = EquiNetBP(dataset=dataset, kmers=2, filters=((96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
-        # test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
-        #                logname=logname, is_aug=True)
-
-        # model_name = f'rc_post_hoc with dataset={dataset}'
-        # rc_model = StandardBPNetArch(dataset=dataset).get_keras_model()
-        # test_BPN_model(model=rc_model, model_name=model_name, dataset=dataset,
-        #                logname=logname, is_aug=True, post_hoc=True)
+    # test_all_models(logname='logfile_bpn.txt')
+    test_all_models_reduced(logname='logfile_bpn_reduced.txt')

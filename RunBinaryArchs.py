@@ -1,12 +1,17 @@
+import os
 import gzip
+import random
 import numpy as np
 from sklearn.metrics import roc_auc_score
 
 import keras
 
+from seqdataloader.batchproducers import coordbased
 from seqdataloader.batchproducers.coordbased.coordbatchproducers import DownsampleNegativesCoordsBatchProducer
 from seqdataloader.batchproducers.coordbased.core import Coordinates
 from seqdataloader.batchproducers.coordbased.coordbatchtransformers import get_revcomp
+from seqdataloader.batchproducers.coordbased import coordbatchproducers
+from seqdataloader.batchproducers.coordbased import coordbatchtransformers
 
 
 def apply_mask(tomask, mask):
@@ -293,3 +298,56 @@ class AuRocCallback(keras.callbacks.Callback):
             self.best_weights = self.model.get_weights()
             self.best_epoch_number = epoch
             self.best_auroc_sofar = auroc
+
+
+def get_reduced_bed(infile, outfile, size=1000):
+    with gzip.open(infile) as f:
+        lines = f.readlines()
+    selected_indices = sorted(random.sample(list(range(len(lines))), size))
+    selected_lines = [lines[selected] for selected in selected_indices]
+
+    with gzip.open(outfile, 'wb') as f:
+        for line in selected_lines:
+            f.write(line)
+
+
+def get_generator(TF, seq_len, is_aug, seed, reduced=True):
+    inputs_coordstovals = coordbased.coordstovals.fasta.PyfaidxCoordsToVals(
+        genome_fasta_path="data/hg19.genome.fa",
+        center_size_to_use=seq_len)
+
+    targets_coordstovals = SimpleLookup(
+        lookup_file=f"data/{TF}/{TF}_lookup.bed.gz",
+        transformation=None,
+        default_returnval=0.0)
+
+    target_proportion_positives = 1 / 5
+
+    pos_bed = f"data/{TF}/{TF}_foreground_train.bed.gz"
+    neg_bed = f"data/{TF}/{TF}_background_train.bed.gz"
+
+    if reduced:
+        pos_bed_reduced = f"data/{TF}/{TF}_reduced_foreground_train.bed.gz"
+        if not os.path.exists(pos_bed_reduced) or True:
+            get_reduced_bed(infile=pos_bed, outfile=pos_bed_reduced)
+        pos_bed = pos_bed_reduced
+
+        # neg_bed_reduced = f"data/{TF}/{TF}_reduced_background_train.bed.gz"
+        # get_reduced_bed(infile=neg_bed, outfile=neg_bed_reduced)
+        # neg_bed = neg_bed_reduced
+
+    coords_batch_producer = coordbatchproducers.DownsampleNegativesCoordsBatchProducer(
+        pos_bed_file=pos_bed,
+        neg_bed_file=neg_bed,
+        target_proportion_positives=target_proportion_positives,
+        batch_size=100,
+        shuffle_before_epoch=True,
+        seed=seed)
+    coordsbatch_transformer = coordbatchtransformers.ReverseComplementAugmenter() if is_aug else None
+
+    train_batch_generator = KerasBatchGenerator(
+        coordsbatch_producer=coords_batch_producer,
+        inputs_coordstovals=inputs_coordstovals,
+        targets_coordstovals=targets_coordstovals,
+        coordsbatch_transformer=coordsbatch_transformer)
+    return train_batch_generator

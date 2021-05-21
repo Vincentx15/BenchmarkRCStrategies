@@ -1,78 +1,16 @@
-import collections
 import os
 import sys
+import collections
 
 import numpy as np
 from sklearn.metrics import roc_auc_score
-
-import tensorflow as tf
-
 import keras
 from keras.callbacks import History
 
 import momma_dragonn
-from seqdataloader.batchproducers import coordbased
-from seqdataloader.batchproducers.coordbased import coordbatchproducers
-from seqdataloader.batchproducers.coordbased import coordbatchtransformers
 
 from BinaryArchs import get_reg_model, EquiNetBinary, CustomRCPS
-from RunBinaryArchs import SimpleLookup, KerasBatchGenerator, AuRocCallback
-import gzip
-import random
-
-
-def get_reduced_bed(infile, outfile, size=1000):
-    with gzip.open(infile) as f:
-        lines = f.readlines()
-    selected_indices = sorted(random.sample(list(range(len(lines))), size))
-    selected_lines = [lines[selected] for selected in selected_indices]
-
-    with gzip.open(outfile, 'wb') as f:
-        for line in selected_lines:
-            f.write(line)
-
-
-def get_generator(TF, seq_len, is_aug, seed, reduced=True):
-    inputs_coordstovals = coordbased.coordstovals.fasta.PyfaidxCoordsToVals(
-        genome_fasta_path="data/hg19.genome.fa",
-        center_size_to_use=seq_len)
-
-    targets_coordstovals = SimpleLookup(
-        lookup_file=f"data/{TF}/{TF}_lookup.bed.gz",
-        transformation=None,
-        default_returnval=0.0)
-
-    target_proportion_positives = 1 / 5
-
-    pos_bed = f"data/{TF}/{TF}_foreground_train.bed.gz"
-    neg_bed = f"data/{TF}/{TF}_background_train.bed.gz"
-
-    if reduced:
-        pos_bed_reduced = f"data/{TF}/{TF}_reduced_foreground_train.bed.gz"
-        if not os.path.exists(pos_bed_reduced) or True:
-            get_reduced_bed(infile=pos_bed, outfile=pos_bed_reduced)
-        pos_bed = pos_bed_reduced
-
-        # neg_bed_reduced = f"data/{TF}/{TF}_reduced_background_train.bed.gz"
-        # get_reduced_bed(infile=neg_bed, outfile=neg_bed_reduced)
-        # neg_bed = neg_bed_reduced
-
-
-    coords_batch_producer = coordbatchproducers.DownsampleNegativesCoordsBatchProducer(
-        pos_bed_file=pos_bed,
-        neg_bed_file=neg_bed,
-        target_proportion_positives=target_proportion_positives,
-        batch_size=100,
-        shuffle_before_epoch=True,
-        seed=seed)
-    coordsbatch_transformer = coordbatchtransformers.ReverseComplementAugmenter() if is_aug else None
-
-    train_batch_generator = KerasBatchGenerator(
-        coordsbatch_producer=coords_batch_producer,
-        inputs_coordstovals=inputs_coordstovals,
-        targets_coordstovals=targets_coordstovals,
-        coordsbatch_transformer=coordsbatch_transformer)
-    return train_batch_generator
+from RunBinaryArchs import SimpleLookup, KerasBatchGenerator, AuRocCallback, get_generator
 
 
 def train_model(model, train_generator,
@@ -303,22 +241,36 @@ def test_reduced(logname='logfile_reproduce_reduced.txt', aggname='outfile_repro
         f.write('Experiments results for reproducibility and prior inclusion :\n')
 
     for tf in ['MAX', 'SPI1', 'CTCF']:
-        # Make the classical models
-        model = get_reg_model(parameters)
-        model_name = f'reduced non equivariant with tf={tf}'
-        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, reduced=True)
+        # # Make the classical models
+        # model = get_reg_model(parameters)
+        # model_name = f'reduced non equivariant with tf={tf}'
+        # test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, reduced=True)
+        #
+        # # Make the classical models with post_hoc
+        # model = get_reg_model(parameters)
+        # model_name = f'reduced_post_hoc with tf={tf}'
+        # test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, rc_aug=True, post_hoc=True,
+        #            reduced=True)
+        #
+        # model = EquiNetBinary(kmers=2, filters=((24, 8), (24, 8), (24, 8)))
+        # model = model.func_api_model()
+        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+        #               loss="binary_crossentropy", metrics=["accuracy"])
+        # model_name = f'reduced_equinet_2_75 with tf={tf}'
+        # test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, reduced=True)
 
-        # Make the classical models with post_hoc
-        model = get_reg_model(parameters)
-        model_name = f'reduced_post_hoc with tf={tf}'
-        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, rc_aug=True, post_hoc=True,
-                   reduced=True)
-
-        model = EquiNetBinary(kmers=2, filters=((24, 8), (24, 8), (24, 8)))
+        model = CustomRCPS(kmers=1)
         model = model.func_api_model()
         model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
                       loss="binary_crossentropy", metrics=["accuracy"])
-        model_name = f'reduced_equinet_2_75 with tf={tf}'
+        model_name = f'reduced_regular1 with tf={tf}'
+        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, reduced=True)
+
+        model = CustomRCPS(kmers=2)
+        model = model.func_api_model()
+        model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                      loss="binary_crossentropy", metrics=["accuracy"])
+        model_name = f'reduced_regular2 with tf={tf}'
         test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, reduced=True)
 
 
