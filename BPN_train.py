@@ -17,7 +17,6 @@ import keras.losses
 import gzip
 import random
 
-
 # Global variables
 keras.losses.MultichannelMultinomialNLL = MultichannelMultinomialNLL
 equilayers = {'RegToRegConv': RegToRegConv,
@@ -156,7 +155,7 @@ def test_all_models(logname):
         test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
                        logname=logname)
 
-        model_name = f'custom_RCPS with dataset={dataset}'
+        model_name = f'RCPS_custom with dataset={dataset}'
         equinet_model = RegularBPN(dataset=dataset).get_keras_model()
         test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
                        logname=logname)
@@ -164,13 +163,13 @@ def test_all_models(logname):
         # Compare to equinets 75 with k=1 and k=2
         model_name = f'equi_75_k1 with dataset={dataset}'
         equi_model = EquiNetBP(dataset=dataset, kmers=1, filters=(
-        (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
+            (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
         test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
                        logname=logname)
 
         model_name = f'best_equi with dataset={dataset}'
         equi_model = EquiNetBP(dataset=dataset, kmers=2, filters=(
-        (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
+            (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
         test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
                        logname=logname)
 
@@ -183,7 +182,7 @@ def test_all_models(logname):
         # Try assessing the impact of data augmentation on equivariant models
         model_name = f'best_equi_aug with dataset={dataset}'
         equi_model = EquiNetBP(dataset=dataset, kmers=2, filters=(
-        (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
+            (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32), (96, 32))).get_keras_model()
         test_BPN_model(model=equi_model, model_name=model_name, dataset=dataset,
                        logname=logname, is_aug=True)
 
@@ -207,7 +206,7 @@ def test_all_models_reduced(logname):
                        logname=logname, reduced=True)
 
         # Compare to the custom RCPS
-        model_name = f'reduced_custom_RCPS with dataset={dataset}'
+        model_name = f'reduced_RCPS_custom with dataset={dataset}'
         equinet_model = RegularBPN(dataset=dataset).get_keras_model()
         test_BPN_model(model=equinet_model, model_name=model_name, dataset=dataset,
                        logname=logname, reduced=True)
@@ -226,8 +225,6 @@ def test_all_models_reduced(logname):
                        logname=logname, reduced=True)
 
 
-
-
 if __name__ == '__main__':
     pass
 
@@ -235,5 +232,5 @@ if __name__ == '__main__':
     np.random.seed(first_seed)
     tf.set_random_seed(first_seed)
 
-    # test_all_models(logname='logfile_bpn.txt')
+    test_all_models(logname='logfile_bpn.txt')
     test_all_models_reduced(logname='logfile_bpn_reduced.txt')

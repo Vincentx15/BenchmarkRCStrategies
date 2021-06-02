@@ -328,7 +328,7 @@ def get_generator(TF, seq_len, is_aug, seed, reduced=True):
 
     if reduced:
         pos_bed_reduced = f"data/{TF}/{TF}_reduced_foreground_train.bed.gz"
-        if not os.path.exists(pos_bed_reduced) or True:
+        if not os.path.exists(pos_bed_reduced):
             get_reduced_bed(infile=pos_bed, outfile=pos_bed_reduced)
         pos_bed = pos_bed_reduced
 

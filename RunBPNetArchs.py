@@ -73,7 +73,7 @@ def get_train_generator(dataset, inputs_coordstovals, targets_coordstovals, seed
     pos_bed = os.path.join('data', dataset, f"bpnet_{dataset}_train_1k_around_summits.bed.gz")
     if reduced:
         pos_bed_reduced = os.path.join('data', dataset, f"bpnet_{dataset}_reduced_train_1k_around_summits.bed.gz")
-        if not os.path.exists(pos_bed_reduced) or True:
+        if not os.path.exists(pos_bed_reduced):
             get_reduced_bed(infile=pos_bed, outfile=pos_bed_reduced)
         pos_bed = pos_bed_reduced
 

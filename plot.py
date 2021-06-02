@@ -6,6 +6,17 @@ import seaborn as sns
 import pandas as pd
 
 
+def change_width(ax, new_value):
+    for patch in ax.patches:
+        current_width = patch.get_width()
+        diff = current_width - new_value
+
+        # we change the bar width
+        patch.set_width(new_value)
+
+        # we recenter the bar
+        patch.set_x(patch.get_x() + diff * .5)
+
 # Get the data
 def group_aggregated(aggregated_file='outfile_reproduce.txt'):
     with open(aggregated_file, 'r') as f:
@@ -113,7 +124,7 @@ def use_res_dict(res_dict, which_plot_idx=None):
     do_barplot = True
     # When running with profile data, avoids bugs
     which_plot_idx = which_plot_idx if which_plot_idx is not None else 3
-    which_plot = ['a_n', 'ks', 'binary', 'reduced', 'bpn']
+    which_plot = ['a_n', 'ks', 'binary', 'reduced', 'bpn', 'bpn_reduced']
     which_plot = which_plot[which_plot_idx]
     if do_barplot:
         if which_plot == 'a_n':
@@ -136,19 +147,35 @@ def use_res_dict(res_dict, which_plot_idx=None):
                               'Equinet 75a_n with k=2': 'Irrep'}
         if which_plot == 'reduced':
             # For the reduction
-            rename_methods = {'reduced_non_equivariant': 'Standard reduced',
-                              'reduced_equinet_2_75': 'Equinet reduced',
+            # rename_methods = {'reduced_non_equivariant': 'Standard reduced',
+            #                   'reduced_equinet_2_75': 'Irrep reduced',
                               # 'reduced_post_hoc': 'Post-hoc reduced',
-                              'non equivariant': 'Standard',
-                              'Equinet 75a_n with k=2': 'Equinet'
+                              # 'non equivariant': 'Standard',
+                              # 'Equinet 75a_n with k=2': 'Irrep'
+                              # }
+            rename_methods = {'reduced_non_equivariant': 'Standard',
+                              'reduced_regular1': 'RCPS',
+                              'reduced_regular2': 'Regular',
+                              'reduced_equinet_2_75': 'Irrep',
                               }
         if which_plot == 'bpn':
             rename_methods = {'non equivariant': 'Standard',
-                              'RCPS_2': 'Regular_2',
-                              'best_equi ': 'Irrep_2',
-                              # 'best_equi_aug': 'Irrep_2_aug',
                               'RCPS ': 'RCPS',
-                              'equi_75_k1': 'Irrep_1'}
+                              'RCPS_2': 'Regular',
+                              'best_equi ': 'Irrep',
+                              # 'best_equi_aug': 'Irrep_2_aug',
+                              # 'RCPS_custom ': 'RCPS_custom',
+                              # 'equi_75_k1': 'Irrep_1'
+                              }
+        if which_plot == 'bpn_reduced':
+            rename_methods = {'reduced_non_equivariant': 'Standard',
+                              'reduced_RCPS_custom': 'RCPS',
+                              'reduced_RCPS_2': 'Regular',
+                              'reduced_best_equi': 'Irrep',
+                              # 'best_equi_aug': 'Irrep_2_aug',
+                              # 'RCPS_custom ': 'RCPS_custom',
+                              # 'equi_75_k1': 'Irrep_1'
+                              }
         query_keys = list(rename_methods.keys())
 
         do_pvalues = True
@@ -156,7 +183,7 @@ def use_res_dict(res_dict, which_plot_idx=None):
             grouped_dict = collections.defaultdict(list)
             for key, value in res_dict.items():
                 new_key = key.split(' with seed')[0]
-                if which_plot == 'bpn':
+                if which_plot in ['bpn', 'bpn_reduced']:
                     _, dataset = new_key.split(' with dataset=')
                     last_value = value
                 else:
@@ -165,10 +192,12 @@ def use_res_dict(res_dict, which_plot_idx=None):
                 # if not 'MAX' in key:
                 #     continue
                 for query_key in query_keys:
-                    if query_key in key:
-                        # if 'reduced_equinet_2_75' in key:
-                        #     print(key)
-                        grouped_dict[query_key].append(last_value)
+                    if which_plot in ['ks']:
+                        if query_key in key and not 'reduced' in key:
+                            grouped_dict[query_key].append(last_value)
+                    else:
+                        if key.startswith(query_key):
+                            grouped_dict[query_key].append(last_value)
             # Just reorder the values
             # grouped_dict = {k: v for k, v in sorted(grouped_dict.items(), key=lambda item: item[0])}
             ordered_grouped_dict = {k: grouped_dict[k] for k in query_keys}
@@ -191,6 +220,8 @@ def use_res_dict(res_dict, which_plot_idx=None):
                 key_reference = 'reduced_equinet_2_75'
             if which_plot == 'bpn':
                 key_reference = 'RCPS '
+            if which_plot == 'bpn_reduced':
+                key_reference = 'reduced_best_equi'
 
             print()
             print('mean_dict p-values')
@@ -201,7 +232,7 @@ def use_res_dict(res_dict, which_plot_idx=None):
             grouped_pvalues[key_reference] = 0
             for key, value in grouped_dict.items():
                 np_values = np.array(value)
-                print(key, np_values.shape)
+                # print(key, np_values.shape)
                 from scipy.stats import wilcoxon
                 from scipy import stats
                 if np_reference.shape != np_values.shape or not np.allclose(np_reference, np_values):
@@ -216,27 +247,32 @@ def use_res_dict(res_dict, which_plot_idx=None):
             # pandas_series = {"method": method, "dataset": dataset, "value": value}
             for key, value in res_dict.items():
                 keep = False
-                for filter in query_keys:
-                    if filter in key:
-                        keep = True
-                        break
+                for query_key in query_keys:
+                    if which_plot in ['ks']:
+                        if query_key in key and not 'reduced' in key:
+                            keep = True
+                            break
+                    else:
+                        if key.startswith(query_key):
+                            keep = True
+                            break
+
                 if not keep:
                     continue
                 # if 'rc_post_hoc' in key:
                 #     continue
                 new_key = key.split(' with seed')[0]
-                if which_plot == 'bpn':
+                if which_plot in {'bpn', 'bpn_reduced'}:
                     _, dataset = new_key.split(' with dataset=')
                     last_value = value
                 else:
                     _, dataset = new_key.split(' with tf=')
                     last_value = value[-1]
-                # print(filter)
-                method = rename_methods[filter]
+                method = rename_methods[query_key]
                 pandas_dict['Method'].append(method)
                 pandas_dict['Dataset'].append(dataset)
                 pandas_dict['AuROC'].append(last_value)
-                if which_plot in ('binary', 'reduced', 'bpn'):
+                if which_plot in ('binary', 'reduced', 'bpn', 'bpn_reduced'):
                     pandas_dict['Method'].append(method)
                     pandas_dict['Dataset'].append('Overall')
                     pandas_dict['AuROC'].append(last_value)
@@ -246,7 +282,10 @@ def use_res_dict(res_dict, which_plot_idx=None):
             if which_plot == 'a_n':
                 new_name = "Rate of \'+1\' representation"
                 pandas_results = pandas_results.rename(columns={"Method": new_name})
-                ax = sns.barplot(x=new_name, y="AuROC", data=pandas_results, order=MODEL_TYPES)
+
+                fig, ax = plt.subplots()
+                ax = sns.barplot(x=new_name, y="AuROC", ax=ax, data=pandas_results, order=MODEL_TYPES)
+                change_width(ax, 0.6)
                 # ax.legend(loc="upper left", ncol=1)
                 plt.ylim(0.97, 0.99)
                 plt.savefig('figs/a_n.pdf', bbox_inches="tight")
@@ -254,17 +293,21 @@ def use_res_dict(res_dict, which_plot_idx=None):
             if which_plot == 'ks':
                 new_name = "Length of k-mer used"
                 pandas_results = pandas_results.rename(columns={"Method": new_name})
-                ax = sns.barplot(x=new_name, y="AuROC", data=pandas_results, order=MODEL_TYPES)
+
+                fig, ax = plt.subplots()
+                ax = sns.barplot(x=new_name, y="AuROC", ax=ax, data=pandas_results, order=MODEL_TYPES)
+                change_width(ax, 0.6)
                 # ax.legend(loc="upper left", ncol=1)
-                plt.ylim(0.982, 0.989)
+                plt.ylim(0.982, 0.988)
                 plt.savefig('figs/ks.pdf', bbox_inches="tight")
                 plt.show()
             if which_plot == 'binary':
                 ax = sns.barplot(x="Dataset", y="AuROC", hue="Method", data=pandas_results,
                                  order=['CTCF', 'MAX', 'SPI1', 'Overall'], hue_order=MODEL_TYPES)
-                # ax.legend(loc="upper left", ncol=1)
-                ax.legend(bbox_to_anchor=(1.04, 0.5), loc="center left", ncol=1)
-                plt.ylim(0.975, 0.995)
+                ax.legend(loc="upper center", ncol=2)
+                # ax.legend(bbox_to_anchor=(1.04, 0.5), loc="center left", ncol=1)
+                plt.title('Full datasets')
+                plt.ylim(0.9775, 0.995)
                 plt.savefig('figs/binary_barplot.pdf', bbox_inches="tight")
                 plt.show()
             if which_plot == 'reduced':
@@ -272,19 +315,35 @@ def use_res_dict(res_dict, which_plot_idx=None):
                                  order=['CTCF', 'MAX', 'SPI1', 'Overall'], hue_order=MODEL_TYPES)
                 ax.legend(bbox_to_anchor=(1.04, 0.5), loc="center left", ncol=1)
                 ax.legend(loc="upper center", ncol=2)
-                plt.ylim(0.93, 1.005)
-                plt.savefig('figs/reduced_barplot.pdf', bbox_inches="tight")
+                plt.title('Reduced datasets')
+                # plt.ylim(0.93, 1.005)
+                # plt.savefig('figs/reduced_barplot.pdf', bbox_inches="tight")
+                plt.ylim(0.93, 0.975)
+                plt.savefig('figs/reduced_barplot_new.pdf', bbox_inches="tight")
                 plt.show()
             if which_plot == 'bpn':
                 new_name_value = "Spearman Correlation"
                 pandas_results = pandas_results.rename(columns={"AuROC": new_name_value})
                 ax = sns.barplot(x="Dataset", y=new_name_value, hue="Method", data=pandas_results,
                                  order=['SOX2', 'OCT4', 'KLF4', 'NANOG', 'Overall'], hue_order=MODEL_TYPES)
-                plt.ylim(0.25, 0.45)
+                plt.ylim(0.25, 0.43)
+                # ax.legend(bbox_to_anchor=(1.04, 0.5), loc="center left", ncol=1)
+                # plt.savefig('figs/binary_barplot.pdf', bbox_inches="tight")
+                plt.title('Full datasets')
+                ax.legend(loc="upper left", ncol=1)
+                plt.savefig('figs/bpn.pdf')
+                plt.show()
+            if which_plot == 'bpn_reduced':
+                new_name_value = "Spearman Correlation"
+                pandas_results = pandas_results.rename(columns={"AuROC": new_name_value})
+                ax = sns.barplot(x="Dataset", y=new_name_value, hue="Method", data=pandas_results,
+                                 order=['SOX2', 'OCT4', 'KLF4', 'NANOG', 'Overall'], hue_order=MODEL_TYPES)
+                plt.ylim(0.22, 0.35)
+                plt.title('Reduced datasets')
                 # ax.legend(bbox_to_anchor=(1.04, 0.5), loc="center left", ncol=1)
                 # plt.savefig('figs/binary_barplot.pdf', bbox_inches="tight")
                 ax.legend(loc="upper left", ncol=1)
-                plt.savefig('figs/bpn.pdf')
+                plt.savefig('figs/bpn_reduced.pdf')
                 plt.show()
 
     # TO PRINT ALL VALUES, get only the final means
@@ -417,16 +476,18 @@ def use_res_dict(res_dict, which_plot_idx=None):
     # === GET THE PLOTTING FORM for each key ===
     get_new_plot_epoch = False
     if get_new_plot_epoch:
-        rename_methods = {'Equinet 75a_n with k=2': 'Irrep',
-                          'RCPS with k=2': 'Regular',
-                          'RCPS with k=1': 'RCPS',
-                          'non equivariant': 'Standard'}
-        rename_methods = {'reduced_non_equivariant': 'Standard reduced',
-                          'reduced_equinet_2_75': 'Equinet reduced',
-                          # 'reduced_post_hoc': 'Post-hoc reduced',
-                          # 'non equivariant': 'Standard',
-                          # 'Equinet 75a_n with k=2': 'Equinet'
-                          }
+        rename_methods = {
+            'non equivariant': 'Standard',
+            'RCPS with k=1': 'RCPS',
+            'RCPS with k=2': 'Regular',
+            'Equinet 75a_n with k=2': 'Irrep',
+        }
+        # rename_methods = {'reduced_non_equivariant': 'Standard reduced',
+        #                   'reduced_equinet_2_75': 'Equinet reduced',
+        #                   # 'reduced_post_hoc': 'Post-hoc reduced',
+        #                   # 'non equivariant': 'Standard',
+        #                   # 'Equinet 75a_n with k=2': 'Equinet'
+        #                   }
         query_keys = list(rename_methods.keys())
 
         grouped_dict = collections.defaultdict(list)
@@ -444,6 +505,8 @@ def use_res_dict(res_dict, which_plot_idx=None):
             std = np.std(value, axis=0)
             n_samples = np.sqrt(len(value))
             transformed[key] = mean, std / n_samples
+
+        print(transformed)
         fig, ax = plt.subplots(1)
         # Iterating over queries ensures the order
         for old_name, new_name in rename_methods.items():
@@ -460,10 +523,11 @@ def use_res_dict(res_dict, which_plot_idx=None):
         ax.legend(loc="lower right", ncol=1)
         ax.set_xlabel('Epochs')
         ax.set_ylabel('Auroc')
-        plt.ylim(0.9, 0.97)
+        plt.ylim(0.97, 0.99)
+        # plt.ylim(0.9, 0.99)
         ax.grid()
         # plt.savefig('figs/binary_max.pdf')
-        plt.savefig('figs/reduced_epochs.pdf', bbox_inches="tight")
+        plt.savefig('figs/epochs.pdf', bbox_inches="tight")
         plt.show()
 
     get_plot_epoch = False
@@ -653,13 +717,30 @@ def deprecated_tools(res_dict):
 
 if __name__ == '__main__':
     pass
-    res_dict_binary, epochs = group_logfile(logfile='archives_results/logfile_all.txt')
-    res_dict_bpn = group_logfile_bpn()
+    res_dict_binary, epochs = group_logfile(logfile='archives_results/logfile_binary_all.txt')
+    res_dict_bpn = group_logfile_bpn(logfile='archives_results/logfile_bpn_all.txt')
 
+    # ['a_n', 'ks', 'binary', 'reduced', 'bpn', 'bpn_reduced']
+
+    # a_n
+    use_res_dict(res_dict_binary, which_plot_idx=0)
+
+    # k_s
+    use_res_dict(res_dict_binary, which_plot_idx=1)
+
+    # binary
+    use_res_dict(res_dict_binary, which_plot_idx=2)
+
+    # reduced
+    use_res_dict(res_dict_binary, which_plot_idx=3)
+
+    # bpn
     use_res_dict(res_dict_bpn, which_plot_idx=4)
-    # use_res_dict(res_dict_binary)
 
-    # res_dict, epochs = group_logfile(logfile='archives_results/logfile_all.txt')
+    # reduced bpn
+    use_res_dict(res_dict_bpn, which_plot_idx=5)
+
+    # res_dict, epochs = group_logfile(logfile='archives_results/logfile_binary_all.txt')
     # plot_res_dict(res_dict, epochs)
 
     # fix_logfile_ctcf()

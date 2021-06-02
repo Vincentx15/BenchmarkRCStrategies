@@ -242,22 +242,22 @@ def test_reduced(logname='logfile_reproduce_reduced.txt', aggname='outfile_repro
 
     for tf in ['MAX', 'SPI1', 'CTCF']:
         # # Make the classical models
-        # model = get_reg_model(parameters)
-        # model_name = f'reduced non equivariant with tf={tf}'
-        # test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, reduced=True)
-        #
+        model = get_reg_model(parameters)
+        model_name = f'reduced non equivariant with tf={tf}'
+        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, reduced=True)
+
         # # Make the classical models with post_hoc
         # model = get_reg_model(parameters)
         # model_name = f'reduced_post_hoc with tf={tf}'
         # test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, rc_aug=True, post_hoc=True,
         #            reduced=True)
-        #
-        # model = EquiNetBinary(kmers=2, filters=((24, 8), (24, 8), (24, 8)))
-        # model = model.func_api_model()
-        # model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
-        #               loss="binary_crossentropy", metrics=["accuracy"])
-        # model_name = f'reduced_equinet_2_75 with tf={tf}'
-        # test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, reduced=True)
+
+        model = EquiNetBinary(kmers=2, filters=((24, 8), (24, 8), (24, 8)))
+        model = model.func_api_model()
+        model.compile(optimizer=keras.optimizers.Adam(lr=0.001),
+                      loss="binary_crossentropy", metrics=["accuracy"])
+        model_name = f'reduced_equinet_2_75 with tf={tf}'
+        test_model(model, logname=logname, aggregatedname=aggname, model_name=model_name, reduced=True)
 
         model = CustomRCPS(kmers=1)
         model = model.func_api_model()
@@ -282,5 +282,5 @@ if __name__ == '__main__':
         'strides': 20
     }
 
-    # test_all()
-    test_reduced()
+    test_all(logname='logfile_binary.txt')
+    test_reduced(logname='logfile_binary_reduced.txt')
